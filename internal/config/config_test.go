@@ -68,24 +68,36 @@ func TestLoadWithoutAnyCredentialsIsNotConfigured(t *testing.T) {
 func TestUserFileOverridesBuiltin(t *testing.T) {
 	p := testPaths(t)
 	writeFile(t, p.UserConfigFile, `
-langfuse_host = "https://user.example.com/"
+environment = "user-env"
 capture_content = true
 enabled = false
 `, 0o600)
 
 	cfg := Load(p, noEnv, testBuiltin)
 
-	if cfg.Host != "https://user.example.com" {
-		t.Errorf("Host = %q, want trailing slash trimmed user value", cfg.Host)
+	if cfg.Environment != "user-env" || !cfg.CaptureContent || cfg.Enabled {
+		t.Errorf("overrides not applied: %+v", cfg)
 	}
-	if !cfg.CaptureContent || cfg.Enabled {
-		t.Errorf("bool overrides not applied: %+v", cfg)
+	if cfg.PublicKey != "pk-lf-builtin" || cfg.Host != testBuiltin.Host {
+		t.Errorf("unset fields should keep builtin value: %+v", cfg)
 	}
-	if cfg.PublicKey != "pk-lf-builtin" {
-		t.Errorf("unset fields should keep builtin value, got %q", cfg.PublicKey)
+	if cfg.Sources["environment"] != SourceUser {
+		t.Errorf("environment source = %q, want user", cfg.Sources["environment"])
 	}
-	if cfg.Sources["langfuse_host"] != SourceUser {
-		t.Errorf("host source = %q, want user", cfg.Sources["langfuse_host"])
+}
+
+func TestUserFileCanReplaceWholeCredentialSet(t *testing.T) {
+	p := testPaths(t)
+	writeFile(t, p.UserConfigFile, `
+langfuse_host = "https://user.example.com/"
+public_key = "pk-lf-user"
+secret_key = "sk-lf-user"
+`, 0o600)
+
+	cfg := Load(p, noEnv, testBuiltin)
+
+	if !cfg.Configured() || cfg.Host != "https://user.example.com" || cfg.SecretKey != "sk-lf-user" {
+		t.Errorf("user credential set not applied: %+v", cfg)
 	}
 }
 
@@ -98,12 +110,20 @@ func TestUserFileWithLoosePermissionsIsIgnored(t *testing.T) {
 	if cfg.SecretKey != "sk-lf-builtin" {
 		t.Errorf("loose-permission file must be ignored, got %q", cfg.SecretKey)
 	}
-	if !containsWarning(cfg.Warnings, "permission") {
+	if !containsWarning(cfg.Warnings, "chmod 600") {
 		t.Errorf("expected permission warning, got %v", cfg.Warnings)
 	}
 }
 
+func trustManagedFilesOwnedByMe(t *testing.T) {
+	t.Helper()
+	prev := managedOwnerUID
+	managedOwnerUID = uint32(os.Geteuid())
+	t.Cleanup(func() { managedOwnerUID = prev })
+}
+
 func TestManagedOverridesUser(t *testing.T) {
+	trustManagedFilesOwnedByMe(t)
 	p := testPaths(t)
 	writeFile(t, p.UserConfigFile, `environment = "user-env"`, 0o600)
 	writeFile(t, p.ManagedConfigFile, `environment = "managed-env"`, 0o644)
@@ -118,22 +138,88 @@ func TestManagedOverridesUser(t *testing.T) {
 	}
 }
 
-func TestEnvOverridesEverything(t *testing.T) {
+func TestEnvOverridesUserButNotManaged(t *testing.T) {
+	trustManagedFilesOwnedByMe(t)
 	p := testPaths(t)
-	writeFile(t, p.ManagedConfigFile, `public_key = "pk-lf-managed"`, 0o644)
+	writeFile(t, p.UserConfigFile, `environment = "user-env"`, 0o600)
+	writeFile(t, p.ManagedConfigFile, `enabled = true`, 0o644)
 	env := map[string]string{
-		"CODEX_TRACE_LANGFUSE_PUBLIC_KEY": "pk-lf-env",
-		"CODEX_TRACE_CAPTURE_CONTENT":     "true",
-		"CODEX_TRACE_ENABLED":             "false",
+		"CODEX_TRACE_ENVIRONMENT":     "env-env",
+		"CODEX_TRACE_CAPTURE_CONTENT": "true",
+		"CODEX_TRACE_ENABLED":         "false",
 	}
 
 	cfg := Load(p, func(k string) string { return env[k] }, testBuiltin)
 
-	if cfg.PublicKey != "pk-lf-env" || !cfg.CaptureContent || cfg.Enabled {
-		t.Errorf("env overrides not applied: %+v", cfg)
+	if cfg.Environment != "env-env" || !cfg.CaptureContent {
+		t.Errorf("env should override user/builtin: %+v", cfg)
 	}
-	if cfg.Sources["public_key"] != SourceEnv {
-		t.Errorf("source = %q, want env", cfg.Sources["public_key"])
+	if !cfg.Enabled || cfg.Sources["enabled"] != SourceManaged {
+		t.Errorf("managed must win over env: enabled=%v source=%q", cfg.Enabled, cfg.Sources["enabled"])
+	}
+}
+
+func TestBuiltinKeysAreDroppedWhenHostIsOverridden(t *testing.T) {
+	env := map[string]string{"CODEX_TRACE_LANGFUSE_HOST": "https://attacker.example.com"}
+
+	cfg := Load(testPaths(t), func(k string) string { return env[k] }, testBuiltin)
+
+	if cfg.SecretKey != "" || cfg.PublicKey != "" || cfg.Configured() {
+		t.Errorf("builtin keys must not follow an overridden host: %+v", cfg)
+	}
+	if !containsWarning(cfg.Warnings, "内置凭证") {
+		t.Errorf("expected warning, got %v", cfg.Warnings)
+	}
+}
+
+func TestOverriddenHostWithOwnKeysIsConfigured(t *testing.T) {
+	env := map[string]string{
+		"CODEX_TRACE_LANGFUSE_HOST":       "https://other.example.com",
+		"CODEX_TRACE_LANGFUSE_PUBLIC_KEY": "pk-lf-own",
+		"CODEX_TRACE_LANGFUSE_SECRET_KEY": " sk-lf-own\n",
+	}
+
+	cfg := Load(testPaths(t), func(k string) string { return env[k] }, testBuiltin)
+
+	if !cfg.Configured() || cfg.SecretKey != "sk-lf-own" {
+		t.Errorf("own credentials should be used and trimmed: %+v", cfg)
+	}
+}
+
+func TestManagedFileMustNotBeWritableByOthers(t *testing.T) {
+	trustManagedFilesOwnedByMe(t)
+	p := testPaths(t)
+	writeFile(t, p.ManagedConfigFile, `enabled = false`, 0o666)
+
+	cfg := Load(p, noEnv, testBuiltin)
+
+	if !cfg.Enabled {
+		t.Error("world-writable managed file must be ignored")
+	}
+	if !containsWarning(cfg.Warnings, "其他用户") {
+		t.Errorf("expected warning, got %v", cfg.Warnings)
+	}
+}
+
+func TestManagedFileMustBeOwnedByRoot(t *testing.T) {
+	p := testPaths(t)
+	writeFile(t, p.ManagedConfigFile, `enabled = false`, 0o644)
+
+	cfg := Load(p, noEnv, testBuiltin)
+
+	if os.Geteuid() != 0 && !cfg.Enabled {
+		t.Error("managed file not owned by root must be ignored")
+	}
+}
+
+func TestDirectoryAsConfigIsIgnored(t *testing.T) {
+	p := testPaths(t)
+	if err := os.Mkdir(p.UserConfigFile, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Load(p, noEnv, testBuiltin)
+	if !containsWarning(cfg.Warnings, "普通文件") {
+		t.Errorf("expected warning, got %v", cfg.Warnings)
 	}
 }
 
@@ -187,7 +273,7 @@ func TestMask(t *testing.T) {
 	cases := map[string]string{
 		"":                       "",
 		"short":                  "****",
-		"sk-lf-1234567890abcdef": "sk-l…cdef",
+		"sk-lf-1234567890abcdef": "sk-lf-****",
 	}
 	for in, want := range cases {
 		if got := Mask(in); got != want {

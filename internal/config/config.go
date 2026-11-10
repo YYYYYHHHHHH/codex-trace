@@ -1,4 +1,8 @@
-// Package config 合并 内置值 → 用户配置 → 托管配置 → 环境变量，得到生效配置。
+// Package config 按 内置值 < 用户配置 < 环境变量 < 托管配置 的优先级合并出生效配置。
+//
+// 托管配置（MDM 下发）优先级最高，保证企业策略不能被用户环境覆盖。
+// 内置凭证只会与内置 host 搭配使用：任何来源改了 host，内置 key 就失效，
+// 防止内置 secret key 被发往他人指定的地址。
 package config
 
 import (
@@ -12,6 +16,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/YYYYYHHHHHH/codex-trace/internal/fsutil"
 	"github.com/YYYYYHHHHHH/codex-trace/internal/paths"
 )
 
@@ -71,21 +76,47 @@ func Load(p paths.Paths, getenv func(string) string, builtin Builtin) Config {
 	}
 	cfg = applyBuiltin(cfg, builtin)
 
-	if fc, warn := readFile(p.UserConfigFile, true); warn != "" {
+	if fc, warn := readFile(p.UserConfigFile, userFileTrusted); warn != "" {
 		cfg.Warnings = append(cfg.Warnings, warn)
 	} else if fc != nil {
 		cfg = applyFile(cfg, *fc, SourceUser)
 	}
-	if fc, warn := readFile(p.ManagedConfigFile, false); warn != "" {
+	cfg = applyEnv(cfg, getenv)
+	if fc, warn := readFile(p.ManagedConfigFile, managedFileTrusted); warn != "" {
 		cfg.Warnings = append(cfg.Warnings, warn)
 	} else if fc != nil {
 		cfg = applyFile(cfg, *fc, SourceManaged)
 	}
-	cfg = applyEnv(cfg, getenv)
-	cfg.Host = strings.TrimRight(cfg.Host, "/")
+
+	cfg.Host = strings.TrimRight(strings.TrimSpace(cfg.Host), "/")
+	cfg.PublicKey = strings.TrimSpace(cfg.PublicKey)
+	cfg.SecretKey = strings.TrimSpace(cfg.SecretKey)
+	cfg = unbindBuiltinKeys(cfg)
 
 	if cfg.Host != "" && !validHost(cfg.Host) {
-		cfg.Warnings = append(cfg.Warnings, fmt.Sprintf("langfuse_host %q 不合法：必须是 https，或指向本机的 http", cfg.Host))
+		cfg.Warnings = append(cfg.Warnings, "langfuse_host 不合法：必须是不带账号信息的 https 地址，或指向本机的 http")
+	}
+	return cfg
+}
+
+// unbindBuiltinKeys 在 host 被覆盖时丢弃内置 key。
+func unbindBuiltinKeys(cfg Config) Config {
+	if cfg.Sources["langfuse_host"] == SourceBuiltin {
+		return cfg
+	}
+	dropped := false
+	if cfg.Sources["public_key"] == SourceBuiltin {
+		cfg.PublicKey = ""
+		delete(cfg.Sources, "public_key")
+		dropped = true
+	}
+	if cfg.Sources["secret_key"] == SourceBuiltin {
+		cfg.SecretKey = ""
+		delete(cfg.Sources, "secret_key")
+		dropped = true
+	}
+	if dropped {
+		cfg.Warnings = append(cfg.Warnings, "langfuse_host 已被覆盖，内置凭证不会发往非内置地址；请在同一处一并配置 public_key / secret_key")
 	}
 	return cfg
 }
@@ -165,31 +196,64 @@ func applyEnv(cfg Config, getenv func(string) string) Config {
 	return cfg
 }
 
-// readFile 返回 (nil, "") 表示文件不存在。requirePrivate 时拒绝组/其他用户可访问的文件。
-func readFile(path string, requirePrivate bool) (*fileConfig, string) {
+// readFile 返回 (nil, "") 表示文件不存在。先打开再 fstat，校验与读取针对同一个文件。
+func readFile(path string, trusted func(os.FileInfo) string) (*fileConfig, string) {
 	if path == "" {
 		return nil, ""
 	}
-	info, err := os.Stat(path)
+	f, err := os.Open(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, ""
 	}
 	if err != nil {
 		return nil, fmt.Sprintf("读取配置 %s 失败：%v", path, err)
 	}
-	if requirePrivate && info.Mode().Perm()&0o077 != 0 {
-		return nil, fmt.Sprintf("配置 %s 的 permission 为 %o，过宽已忽略；请执行 chmod 600", path, info.Mode().Perm())
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Sprintf("读取配置 %s 失败：%v", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Sprintf("配置 %s 不是普通文件，已忽略", path)
+	}
+	if reason := trusted(info); reason != "" {
+		return nil, fmt.Sprintf("配置 %s %s，已忽略", path, reason)
 	}
 	var fc fileConfig
-	if _, err := toml.DecodeFile(path, &fc); err != nil {
+	if _, err := toml.NewDecoder(f).Decode(&fc); err != nil {
 		return nil, fmt.Sprintf("解析配置 %s 失败：%v", path, err)
 	}
 	return &fc, ""
 }
 
+// managedOwnerUID 是托管配置要求的属主（root），测试中可替换。
+var managedOwnerUID uint32 = 0
+
+// userFileTrusted 要求用户配置属于当前用户且只有属主可读写（其中可能有 secret key）。
+func userFileTrusted(info os.FileInfo) string {
+	if uid, ok := fsutil.OwnerUID(info); ok && uid != uint32(os.Geteuid()) {
+		return "不属于当前用户"
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return fmt.Sprintf("的 permission 为 %o，过宽；请执行 chmod 600", info.Mode().Perm())
+	}
+	return ""
+}
+
+// managedFileTrusted 要求托管配置属于 root 且组 / 其他用户不可写。
+func managedFileTrusted(info os.FileInfo) string {
+	if uid, ok := fsutil.OwnerUID(info); ok && uid != managedOwnerUID {
+		return "不属于 root"
+	}
+	if info.Mode().Perm()&0o022 != 0 {
+		return "可被其他用户修改"
+	}
+	return ""
+}
+
 func validHost(h string) bool {
 	u, err := url.Parse(h)
-	if err != nil || u.Host == "" {
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return false
 	}
 	switch u.Scheme {
@@ -203,14 +267,14 @@ func validHost(h string) bool {
 	}
 }
 
-// Mask 用于展示密钥：只保留首尾各 4 个字符。
+// Mask 用于展示密钥：只保留前缀（如 "sk-lf-"），不暴露任何随机部分。
 func Mask(s string) string {
-	const keep = 4
+	const keep = 6
 	if s == "" {
 		return ""
 	}
-	if len(s) <= keep*3 {
+	if len(s) <= keep*2 {
 		return "****"
 	}
-	return s[:keep] + "…" + s[len(s)-keep:]
+	return s[:keep] + "****"
 }

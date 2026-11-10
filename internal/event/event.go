@@ -24,6 +24,9 @@ const (
 	Interrupt         = "Interrupt"
 )
 
+// ContentSizesField 是 hook 剥离内容字段后记录各字段原始长度的字段名。
+const ContentSizesField = "codex_trace_content_sizes"
+
 // Record 是 hook 写入 spool 的一条记录：原始 payload + 接收时间。
 type Record struct {
 	Version    int             `json:"v"`
@@ -67,6 +70,9 @@ type Payload struct {
 	AgentTranscriptPath string `json:"agent_transcript_path"`
 
 	LastAssistantMessage string `json:"last_assistant_message"`
+
+	// ContentSizes 在 capture_content=false 时由 hook 写入：被剥离字段 → 原始字节数。
+	ContentSizes map[string]int `json:"codex_trace_content_sizes"`
 }
 
 // Decode 解析记录中的 payload；缺少 session_id 的 payload 无法关联，视为无效。

@@ -4,8 +4,10 @@
 package lock
 
 import (
+	"errors"
 	"os"
 	"syscall"
+	"time"
 )
 
 // TryLock 非阻塞地获取排他锁。ok=false 表示已被其他进程持有。
@@ -16,7 +18,7 @@ func TryLock(path string) (release func(), ok bool, err error) {
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()
-		if err == syscall.EWOULDBLOCK {
+		if errors.Is(err, syscall.EWOULDBLOCK) {
 			return nil, false, nil
 		}
 		return nil, false, err
@@ -27,16 +29,14 @@ func TryLock(path string) (release func(), ok bool, err error) {
 	}, true, nil
 }
 
-// Held 探测锁是否被其他进程持有；文件不存在或探测失败时返回 false。
-func Held(path string) bool {
-	f, err := os.OpenFile(path, os.O_RDWR, 0)
-	if err != nil {
-		return false
+// TryLockWait 在 timeout 内反复尝试获取锁，用于接替正在退出的上一个持锁进程。
+func TryLockWait(path string, timeout, poll time.Duration) (release func(), ok bool, err error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		release, ok, err = TryLock(path)
+		if err != nil || ok || time.Now().After(deadline) {
+			return release, ok, err
+		}
+		time.Sleep(poll)
 	}
-	defer f.Close()
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		return err == syscall.EWOULDBLOCK
-	}
-	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-	return false
 }

@@ -7,12 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/YYYYYHHHHHH/codex-trace/internal/config"
 	"github.com/YYYYYHHHHHH/codex-trace/internal/event"
-	"github.com/YYYYYHHHHHH/codex-trace/internal/lock"
 	"github.com/YYYYYHHHHHH/codex-trace/internal/paths"
 	"github.com/YYYYYHHHHHH/codex-trace/internal/queue"
 )
@@ -20,6 +20,7 @@ import (
 var creds = config.Builtin{Host: "https://lf.example.com", PublicKey: "pk-lf-x", SecretKey: "sk-lf-x"}
 
 type harness struct {
+	mu       sync.Mutex
 	paths    paths.Paths
 	started  int
 	startErr error
@@ -43,9 +44,12 @@ func (h *harness) deps(stdin string, builtin config.Builtin) Deps {
 		Paths:   h.paths,
 		Builtin: builtin,
 		StartUploader: func() error {
+			h.mu.Lock()
+			defer h.mu.Unlock()
 			h.started++
 			return h.startErr
 		},
+		Rand: func() float64 { return 0.99 },
 	}
 }
 
@@ -167,22 +171,173 @@ func TestRunDrainsAndDropsOversizedInput(t *testing.T) {
 	}
 }
 
-func TestRunDoesNotStartUploaderWhenAlreadyRunning(t *testing.T) {
+func TestRunDoesNotStartUploaderWhenHeartbeatIsFresh(t *testing.T) {
 	h := newHarness(t)
+	d := h.deps(validPayload, creds)
 	_ = os.MkdirAll(h.paths.StateDir, 0o700)
-	release, ok, err := lock.TryLock(h.paths.LockFile())
-	if err != nil || !ok {
-		t.Fatalf("TryLock: %v %v", ok, err)
-	}
-	defer release()
+	_ = os.WriteFile(h.paths.HeartbeatFile(), nil, 0o600)
+	now := time.Now()
+	_ = os.Chtimes(h.paths.HeartbeatFile(), now, now)
+	d.Now = func() time.Time { return now.Add(time.Second) }
 
-	Run(h.deps(validPayload, creds))
+	Run(d)
 
 	if h.started != 0 {
-		t.Error("uploader must not be started while lock is held")
+		t.Error("uploader must not be started while heartbeat is fresh")
 	}
 	if len(h.spool(t)) != 1 {
 		t.Error("payload should still be spooled")
+	}
+}
+
+func TestRunStartsUploaderWhenHeartbeatIsStale(t *testing.T) {
+	h := newHarness(t)
+	d := h.deps(validPayload, creds)
+	_ = os.MkdirAll(h.paths.StateDir, 0o700)
+	_ = os.WriteFile(h.paths.HeartbeatFile(), nil, 0o600)
+	old := time.Now().Add(-time.Minute)
+	_ = os.Chtimes(h.paths.HeartbeatFile(), old, old)
+	d.Now = time.Now
+
+	Run(d)
+
+	if h.started != 1 {
+		t.Errorf("stale heartbeat should trigger a start, started=%d", h.started)
+	}
+}
+
+func readOnlyRecord(t *testing.T, h *harness) map[string]json.RawMessage {
+	t.Helper()
+	entries := h.spool(t)
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 spool entry, got %d", len(entries))
+	}
+	data, _ := queue.New(h.paths.SpoolDir()).Read(entries[0].Name)
+	rec, err := event.ParseRecord(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Payload, &obj); err != nil {
+		t.Fatal(err)
+	}
+	return obj
+}
+
+func TestRunStripsContentByDefault(t *testing.T) {
+	h := newHarness(t)
+	payload := `{"session_id":"s","hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"c1",` +
+		`"tool_input":{"command":"cat secret.txt"},"tool_response":"top secret","prompt":"你好"}`
+
+	Run(h.deps(payload, creds))
+
+	obj := readOnlyRecord(t, h)
+	for _, k := range []string{"tool_input", "tool_response", "prompt"} {
+		if _, ok := obj[k]; ok {
+			t.Errorf("content field %q must not be spooled when capture_content=false", k)
+		}
+	}
+	var sizes map[string]int
+	_ = json.Unmarshal(obj[event.ContentSizesField], &sizes)
+	if sizes["tool_response"] != len("top secret") || sizes["prompt"] != len("你好") || sizes["tool_input"] == 0 {
+		t.Errorf("content sizes = %v", sizes)
+	}
+	if string(obj["tool_use_id"]) != `"c1"` {
+		t.Error("metadata fields must be kept")
+	}
+}
+
+func TestRunKeepsSpawnAgentResponseForLinking(t *testing.T) {
+	h := newHarness(t)
+	payload := `{"session_id":"s","tool_name":"collaborationspawn_agent","tool_input":{"message":"do x"},` +
+		`"tool_response":"{\"task_name\":\"/root/x\"}"}`
+
+	Run(h.deps(payload, creds))
+
+	obj := readOnlyRecord(t, h)
+	if _, ok := obj["tool_response"]; !ok {
+		t.Error("spawn_agent tool_response must be kept")
+	}
+	if _, ok := obj["tool_input"]; ok {
+		t.Error("spawn_agent tool_input (task message) must still be stripped")
+	}
+}
+
+func TestRunKeepsContentWhenCaptureEnabled(t *testing.T) {
+	h := newHarness(t)
+	d := h.deps(`{"session_id":"s","prompt":"hello"}`, creds)
+	d.Getenv = func(k string) string {
+		if k == "CODEX_TRACE_CAPTURE_CONTENT" {
+			return "true"
+		}
+		return ""
+	}
+
+	Run(d)
+
+	if obj := readOnlyRecord(t, h); string(obj["prompt"]) != `"hello"` {
+		t.Errorf("prompt should be kept, got %s", obj["prompt"])
+	}
+}
+
+func TestRunRefusesSymlinkedStateDir(t *testing.T) {
+	h := newHarness(t)
+	target := filepath.Join(t.TempDir(), "elsewhere")
+	_ = os.Mkdir(target, 0o700)
+	if err := os.Symlink(target, h.paths.StateDir); err != nil {
+		t.Fatal(err)
+	}
+
+	Run(h.deps(validPayload, creds))
+
+	entries, _ := os.ReadDir(target)
+	if len(entries) != 0 || h.started != 0 {
+		t.Error("nothing may be written through a symlinked state dir")
+	}
+}
+
+func TestRunWithUnusablePathsIsNoop(t *testing.T) {
+	d := newHarness(t).deps(validPayload, creds)
+	d.Paths = paths.Paths{}
+	Run(d)
+}
+
+func TestRunEnforcesSpoolCapWhenSampled(t *testing.T) {
+	h := newHarness(t)
+	q := queue.New(h.paths.SpoolDir())
+	big := bytes.Repeat([]byte("x"), SpoolMaxBytes/2+1)
+	for i := 0; i < 3; i++ {
+		if _, err := q.Put(big, time.Unix(int64(i), 0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d := h.deps(validPayload, creds)
+	d.Rand = func() float64 { return 0 }
+
+	Run(d)
+
+	if size, _ := q.TotalSize(); size > SpoolMaxBytes {
+		t.Errorf("spool size %d exceeds cap", size)
+	}
+}
+
+func TestConcurrentRunsKeepEveryRecord(t *testing.T) {
+	h := newHarness(t)
+	const n = 32
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			d := h.deps(validPayload, creds)
+			d.Now = time.Now
+			Run(d)
+		}()
+	}
+	wg.Wait()
+
+	if got := len(h.spool(t)); got != n {
+		t.Errorf("spooled %d records, want %d", got, n)
 	}
 }
 
@@ -247,6 +402,7 @@ func BenchmarkRun(b *testing.B) {
 			Paths:         p,
 			Builtin:       creds,
 			StartUploader: func() error { return nil },
+			Rand:          func() float64 { return 0.99 },
 		})
 	}
 }

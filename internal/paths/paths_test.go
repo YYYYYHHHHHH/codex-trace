@@ -53,13 +53,37 @@ func TestResolveIgnoresRelativeXDG(t *testing.T) {
 
 func TestResolveExplicitOverrides(t *testing.T) {
 	p := Resolve(envOf(map[string]string{
-		"CODEX_TRACE_STATE_DIR":      "/tmp/state",
+		"CODEX_TRACE_STATE_DIR":      "/tmp/state/",
 		"CODEX_TRACE_CONFIG":         "/tmp/user.toml",
 		"CODEX_TRACE_MANAGED_CONFIG": "/tmp/managed.toml",
 	}), "/home/alice", "linux")
 
-	if p.StateDir != "/tmp/state" || p.UserConfigFile != "/tmp/user.toml" || p.ManagedConfigFile != "/tmp/managed.toml" {
+	if p.StateDir != "/tmp/state" || p.UserConfigFile != "/tmp/user.toml" {
 		t.Errorf("explicit overrides not applied: %+v", p)
+	}
+	if p.ManagedConfigFile != "/etc/codex-trace/config.toml" {
+		t.Errorf("managed config path must not be overridable, got %q", p.ManagedConfigFile)
+	}
+}
+
+func TestResolveIgnoresRelativeOverrides(t *testing.T) {
+	p := Resolve(envOf(map[string]string{
+		"CODEX_TRACE_STATE_DIR": "state",
+		"CODEX_TRACE_CONFIG":    "user.toml",
+	}), "/home/alice", "linux")
+	if p.StateDir != "/home/alice/.local/state/codex-trace" || p.UserConfigFile != "/home/alice/.config/codex-trace/config.toml" {
+		t.Errorf("relative overrides must be ignored: %+v", p)
+	}
+}
+
+func TestResolveWithoutHomeIsUnusable(t *testing.T) {
+	for _, home := range []string{"", "relative"} {
+		if p := Resolve(envOf(nil), home, "linux"); p.Usable() {
+			t.Errorf("home %q should give unusable paths, got %+v", home, p)
+		}
+	}
+	if !Resolve(envOf(nil), "/home/alice", "linux").Usable() {
+		t.Error("normal paths should be usable")
 	}
 }
 
@@ -76,7 +100,7 @@ func TestDerivedPathsLiveUnderStateDir(t *testing.T) {
 			t.Errorf("%s dir %q not directly under state dir", name, got)
 		}
 	}
-	for _, f := range []string{p.LockFile(), p.PausedFile(), p.LastHookFile(), p.StatusFile()} {
+	for _, f := range []string{p.LockFile(), p.PausedFile(), p.LastHookFile(), p.HeartbeatFile(), p.StatusFile()} {
 		if filepath.Dir(f) != "/s" {
 			t.Errorf("file %q not directly under state dir", f)
 		}

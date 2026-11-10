@@ -88,3 +88,24 @@ func TestVersion(t *testing.T) {
 		t.Errorf("version output %q code %d", stdout.String(), code)
 	}
 }
+
+func TestUploaderEnvKeepsOnlyAllowlistedVariables(t *testing.T) {
+	got := uploaderEnv([]string{
+		"HOME=/home/alice",
+		"PATH=/usr/bin",
+		"HTTPS_PROXY=http://proxy:3128",
+		"CODEX_TRACE_STATE_DIR=/tmp/s",
+		"ANTHROPIC_AUTH_TOKEN=secret",
+		"OPENAI_API_KEY=secret",
+		"GITHUB_TOKEN=secret",
+	})
+	joined := strings.Join(got, "\n")
+	for _, want := range []string{"HOME=", "PATH=", "HTTPS_PROXY=", "CODEX_TRACE_STATE_DIR="} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing %s in %v", want, got)
+		}
+	}
+	if strings.Contains(joined, "secret") {
+		t.Errorf("unrelated secrets leaked into uploader env: %v", got)
+	}
+}
