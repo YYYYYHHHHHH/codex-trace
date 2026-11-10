@@ -57,7 +57,7 @@ make dist      # 四平台二进制 → plugins/codex-trace/bin/<os>-<arch>/trac
 所有命令都在插件目录的 `bin/trace-hook` 下：
 
 ```sh
-TRACE_HOOK=$(ls -d "${CODEX_HOME:-$HOME/.codex}"/plugins/cache/*/codex-trace/*/bin/trace-hook | tail -1)
+TRACE_HOOK=$(ls -td "${CODEX_HOME:-$HOME/.codex}"/plugins/cache/*/codex-trace/*/bin/trace-hook | head -1)
 ```
 
 | 命令 | 用途 |
@@ -79,7 +79,7 @@ TRACE_HOOK=$(ls -d "${CODEX_HOME:-$HOME/.codex}"/plugins/cache/*/codex-trace/*/b
 | `sessions/` | 每个会话的关联状态 |
 | `status.json` | 上传进程状态 |
 | `logs/hook.log`、`logs/upload.log` | 错误日志（1MB 轮转），不含密钥 |
-| `logs/last-batch.json` | 最近一次上传的批次 |
+| `logs/last-batch.json` | 最近一次上传的批次（0600；开启 `capture_content` 时包含脱敏后的内容） |
 
 常见问题：
 
@@ -101,7 +101,7 @@ environment = "debug"
 enabled = false          # 停用
 ```
 
-安全约束：任何来源覆盖了 `langfuse_host`，内置 key 就不再使用，必须在同一处一并提供 `public_key` / `secret_key`，防止内置 key 被发往其他地址。
+安全约束：任何来源覆盖了 `langfuse_host`，内置 key 就不再使用，必须另外提供 `public_key` / `secret_key`（可来自任一来源），防止内置 key 被发往其他地址。
 
 ## 5. 数据清理
 

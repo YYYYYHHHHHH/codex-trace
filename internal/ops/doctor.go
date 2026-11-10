@@ -75,12 +75,25 @@ func Doctor(ctx context.Context, e Env, opts DoctorOptions) error {
 	return nil
 }
 
+// checkStateDir 只检查、不修改（诊断命令不应有副作用）。
 func checkStateDir(e Env) check {
 	if !e.Paths.Usable() {
 		return check{levelFail, "状态目录", "无法确定 HOME"}
 	}
-	if err := fsutil.EnsurePrivateDir(e.Paths.StateDir); err != nil {
+	info, err := os.Lstat(e.Paths.StateDir)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return check{levelOK, "状态目录", e.Paths.StateDir + "（尚未创建，首次 hook 触发时创建）"}
+	case err != nil:
 		return check{levelFail, "状态目录", err.Error()}
+	case info.Mode()&os.ModeSymlink != 0 || !info.IsDir():
+		return check{levelFail, "状态目录", e.Paths.StateDir + " 不是真实目录"}
+	}
+	if uid, ok := fsutil.OwnerUID(info); ok && uid != uint32(os.Geteuid()) {
+		return check{levelFail, "状态目录", fmt.Sprintf("%s 属于 uid %d，hook 会拒绝使用", e.Paths.StateDir, uid)}
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return check{levelWarn, "状态目录", fmt.Sprintf("%s 权限为 %o，下次 hook 时会收紧为 700", e.Paths.StateDir, info.Mode().Perm())}
 	}
 	return check{levelOK, "状态目录", e.Paths.StateDir}
 }
@@ -105,7 +118,12 @@ func checkConfig(e Env) check {
 	return check{levelOK, "配置", detail}
 }
 
-// checkPlugin 读取 Codex 配置，确认插件已启用、hook 已审批（未审批的 hook 会被 Codex 静默跳过）。
+// pluginHookCount 是插件 hooks.json 中声明的 hook 数。
+const pluginHookCount = 9
+
+// checkPlugin 读取 Codex 配置，确认插件已启用、hook 有审批记录。
+// 注意：只能确认"审批过"，无法确认审批对当前版本仍然有效（插件升级后需重新审批），
+// 是否生效以 checkHookFiring 的最近触发时间为准。
 func checkPlugin(e Env) check {
 	var cfg struct {
 		Plugins map[string]struct {
@@ -122,15 +140,16 @@ func checkPlugin(e Env) check {
 	if _, err := toml.DecodeFile(path, &cfg); err != nil {
 		return check{levelWarn, "Codex 插件", fmt.Sprintf("无法读取 %s：%v", path, err)}
 	}
-	installed := false
+	var pluginIDs []string
 	for name, p := range cfg.Plugins {
 		if strings.HasPrefix(name, "codex-trace@") && (p.Enabled == nil || *p.Enabled) {
-			installed = true
+			pluginIDs = append(pluginIDs, name)
 		}
 	}
+	installed := len(pluginIDs) > 0
 	trusted, seen := 0, 0
 	for key, st := range cfg.Hooks.State {
-		if !strings.Contains(key, "codex-trace") {
+		if !hookKeyBelongsTo(key, pluginIDs) {
 			continue
 		}
 		seen++
@@ -143,10 +162,22 @@ func checkPlugin(e Env) check {
 		return check{levelWarn, "Codex 插件", "未在 config.toml 中找到已启用的 codex-trace 插件（MDM 托管安装时可忽略）"}
 	case seen == 0:
 		return check{levelWarn, "Codex 插件", "已安装，但未发现 hook 审批记录：请在 Codex 中审批 codex-trace 的 hooks"}
-	case trusted < seen:
-		return check{levelWarn, "Codex 插件", fmt.Sprintf("%d/%d 个 hook 已审批；插件升级后需要重新审批", trusted, seen)}
+	case trusted < pluginHookCount:
+		return check{levelWarn, "Codex 插件", fmt.Sprintf("%d/%d 个 hook 有审批记录；请在 Codex 中审批全部 hooks", trusted, pluginHookCount)}
 	}
-	return check{levelOK, "Codex 插件", fmt.Sprintf("已安装，%d 个 hook 已审批", trusted)}
+	return check{levelOK, "Codex 插件", fmt.Sprintf("已安装，%d 个 hook 有审批记录（升级后需重新审批，是否生效见下一项）", trusted)}
+}
+
+// hookKeyBelongsTo 判断 hooks.state 的 key 是否属于这些插件（key 中包含插件 id 作为独立片段）。
+func hookKeyBelongsTo(key string, pluginIDs []string) bool {
+	for _, id := range pluginIDs {
+		for _, part := range strings.FieldsFunc(key, func(r rune) bool { return r == ':' || r == '/' }) {
+			if part == id {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func checkHookFiring(e Env) check {

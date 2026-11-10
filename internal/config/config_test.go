@@ -271,9 +271,11 @@ func TestInsecureHostIsRejected(t *testing.T) {
 
 func TestMask(t *testing.T) {
 	cases := map[string]string{
-		"":                       "",
-		"short":                  "****",
-		"sk-lf-1234567890abcdef": "sk-lf-****",
+		"":                        "",
+		"short":                   "****",
+		"sk-lf-1234567890abcdef":  "sk-lf-****",
+		"custom-secret-value-123": "****",
+		"sk-lf-123":               "****",
 	}
 	for in, want := range cases {
 		if got := Mask(in); got != want {

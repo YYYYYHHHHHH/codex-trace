@@ -39,7 +39,7 @@ Codex 对插件自带的 hook 有审批机制，**未审批的 hook 不会执行
 用 Codex 正常跑一轮对话后：
 
 ```sh
-TRACE_HOOK=$(ls -d "${CODEX_HOME:-$HOME/.codex}"/plugins/cache/*/codex-trace/*/bin/trace-hook | tail -1)
+TRACE_HOOK=$(ls -td "${CODEX_HOME:-$HOME/.codex}"/plugins/cache/*/codex-trace/*/bin/trace-hook | head -1)
 "$TRACE_HOOK" doctor
 ```
 

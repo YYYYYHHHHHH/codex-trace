@@ -267,14 +267,15 @@ func validHost(h string) bool {
 	}
 }
 
-// Mask 用于展示密钥：只保留前缀（如 "sk-lf-"），不暴露任何随机部分。
+// Mask 用于展示密钥：只保留已知的固定前缀（pk-lf- / sk-lf-），不暴露任何随机部分。
 func Mask(s string) string {
-	const keep = 6
 	if s == "" {
 		return ""
 	}
-	if len(s) <= keep*2 {
-		return "****"
+	for _, prefix := range []string{"pk-lf-", "sk-lf-"} {
+		if strings.HasPrefix(s, prefix) && len(s) > len(prefix)+6 {
+			return prefix + "****"
+		}
 	}
-	return s[:keep] + "****"
+	return "****"
 }

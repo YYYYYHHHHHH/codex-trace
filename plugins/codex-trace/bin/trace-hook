@@ -2,7 +2,10 @@
 # 按平台选择 trace-hook 二进制。找不到可用二进制时：hook 调用静默退出（不影响 Codex），其他命令报错。
 # hook 每次工具调用都会执行，启动开销要尽量小：优先用 bash 自带的 OSTYPE / HOSTTYPE
 # （macOS 的 /bin/sh 即 bash，省去一次 fork），对应二进制不存在时再退回 uname。
-dir=${0%/*}
+case "$0" in
+  */*) dir=${0%/*} ;;
+  *) dir=$(dirname -- "$(command -v -- "$0")") ;; # 经 PATH 调用
+esac
 
 normalize() {
   case "$1" in
@@ -25,12 +28,14 @@ $(uname -sm)
 UNAME
   normalize "$sys" "$mach"
 fi
-if [ -x "$bin" ]; then
-  exec "$bin" "$@"
-fi
 if [ "${1-}" = "hook" ]; then
+  # hook 调用必须静默：即使二进制损坏导致 exec 失败，也不向 Codex 输出错误
+  [ -x "$bin" ] && exec "$bin" "$@" 2>/dev/null
   cat >/dev/null 2>&1
   exit 0
 fi
-echo "codex-trace: 没有适用于 $os-$arch 的 trace-hook" >&2
+if [ -x "$bin" ]; then
+  exec "$bin" "$@"
+fi
+echo "codex-trace: 没有适用于 ${os}-${arch} 的 trace-hook" >&2
 exit 1

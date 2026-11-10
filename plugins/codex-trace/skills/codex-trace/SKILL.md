@@ -10,7 +10,7 @@ codex-trace 插件把 Codex 的调用链上报到团队的 Langfuse。所有操�
 ## 找到命令
 
 ```sh
-TRACE_HOOK=$(ls -d "${CODEX_HOME:-$HOME/.codex}"/plugins/cache/*/codex-trace/*/bin/trace-hook 2>/dev/null | tail -1)
+TRACE_HOOK=$(ls -td "${CODEX_HOME:-$HOME/.codex}"/plugins/cache/*/codex-trace/*/bin/trace-hook 2>/dev/null | head -1)
 ```
 
 ## 常用命令

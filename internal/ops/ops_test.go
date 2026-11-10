@@ -197,8 +197,12 @@ func TestDoctorReportsUploadFailure(t *testing.T) {
 func writeCodexConfig(t *testing.T, h *harness, trusted bool) {
 	t.Helper()
 	content := "[plugins.\"codex-trace@codex-trace\"]\nenabled = true\n"
+	// 无关路径中恰好含 codex-trace 的 hook 不应被计入
+	content += "\n[hooks.state.\"/Users/alice/Code/codex-trace/.codex/hooks.json:stop:0:0\"]\ntrusted_hash = \"sha256:y\"\n"
 	if trusted {
-		content += "\n[hooks.state.\"plugin:codex-trace@codex-trace:pre_tool_use:0:0\"]\ntrusted_hash = \"sha256:x\"\n"
+		for _, ev := range []string{"session_start", "user_prompt_submit", "pre_tool_use", "post_tool_use", "permission_request", "subagent_start", "subagent_stop", "stop", "interrupt"} {
+			content += "\n[hooks.state.\"plugin:codex-trace@codex-trace:" + ev + ":0:0\"]\ntrusted_hash = \"sha256:x\"\n"
+		}
 	}
 	if err := os.WriteFile(filepath.Join(h.env.CodexHome, "config.toml"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
@@ -275,5 +279,45 @@ func TestAgo(t *testing.T) {
 	}
 	if ago(time.Time{}, now) != "无" {
 		t.Error("zero time")
+	}
+}
+
+func TestCheckPluginPartialApproval(t *testing.T) {
+	h := newHarness(t, "https://lf.example.com")
+	content := "[plugins.\"codex-trace@codex-trace\"]\nenabled = true\n" +
+		"\n[hooks.state.\"plugin:codex-trace@codex-trace:stop:0:0\"]\ntrusted_hash = \"sha256:x\"\n"
+	_ = os.WriteFile(filepath.Join(h.env.CodexHome, "config.toml"), []byte(content), 0o600)
+	if c := checkPlugin(h.env); c.level != levelWarn || !strings.Contains(c.detail, "1/9") {
+		t.Errorf("partial approval should warn: %+v", c)
+	}
+}
+
+func TestCheckStateDirHasNoSideEffects(t *testing.T) {
+	h := newHarness(t, "https://lf.example.com")
+	if c := checkStateDir(h.env); c.level != levelOK || !strings.Contains(c.detail, "尚未创建") {
+		t.Errorf("missing dir: %+v", c)
+	}
+	if _, err := os.Stat(h.env.Paths.StateDir); !os.IsNotExist(err) {
+		t.Error("doctor must not create the state dir")
+	}
+	_ = os.Mkdir(h.env.Paths.StateDir, 0o755)
+	_ = os.Chmod(h.env.Paths.StateDir, 0o755)
+	if c := checkStateDir(h.env); c.level != levelWarn {
+		t.Errorf("loose perms should warn: %+v", c)
+	}
+	if info, _ := os.Stat(h.env.Paths.StateDir); info.Mode().Perm() != 0o755 {
+		t.Error("doctor must not change permissions")
+	}
+}
+
+func TestPreviewShowsContentSizesOnly(t *testing.T) {
+	h := newHarness(t, "https://lf.example.com")
+	root := otlp.Span{TraceID: otlp.NewTraceID("t"), SpanID: otlp.NewSpanID("turn", "t"), Name: "codex turn",
+		Attrs: []otlp.Attr{otlp.String("langfuse.observation.input", "TOP-SECRET-PROMPT")}}
+	body, _ := otlp.Encode(nil, "s", "v", []otlp.Span{root})
+	_, _ = queue.New(h.env.Paths.OutboxDir()).Put(body, now)
+	_ = Preview(h.env, PreviewOptions{})
+	if strings.Contains(h.out.String(), "TOP-SECRET-PROMPT") {
+		t.Error("tree preview must show content sizes, not content")
 	}
 }
