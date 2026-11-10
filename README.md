@@ -6,7 +6,8 @@
 
 - ✅ 采集、关联、上传、运维命令、插件打包全部完成。
 - ✅ 真实 Langfuse 验收通过（2026-11-10）：`make smoke`（fixture 回放 + 去重）与 `make e2e-langfuse`（真实 Codex 会话上报并读回校验）。见 [docs/otel-mapping.md](docs/otel-mapping.md)。
-- ⏳ 客户试点、发布到私有 git marketplace。见 [docs/PLAN.md](docs/PLAN.md)。
+- ✅ 已发布到公开 git marketplace：`codex plugin marketplace add YYYYYHHHHHH/codex-trace@release`（v0.1.0）。
+- ⏳ 客户试点。见 [docs/PLAN.md](docs/PLAN.md)。
 
 ## 文档
 

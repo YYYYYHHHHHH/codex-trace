@@ -23,7 +23,7 @@ codex plugin marketplace add YYYYYHHHHHH/codex-trace@release
 codex plugin add codex-trace@codex-trace
 ```
 
-仓库是私有的：需要先获得 `YYYYYHHHHHH/codex-trace` 的读权限，并确保本机 git 能访问 GitHub 私有仓库（例如已执行 `gh auth login`，或配置了 SSH key；SSH 方式可写 `git@github.com:YYYYYHHHHHH/codex-trace.git@release`）。
+仓库是公开的，不需要 GitHub 账号或额外权限，本机能访问 github.com 即可。
 
 升级到新版本：`codex plugin marketplace upgrade`，然后在 Codex 中重新审批 hook。
 
@@ -57,7 +57,7 @@ CODEX=~/.codex/plugins/.plugin-appserver/codex-cli/bin/codex
 
 3. 重新打开 Codex 桌面端，在插件页面找到 "Codex Trace" 并安装。
 
-两种方式都需要本机 git 能访问这个私有仓库（见上文）。桌面端从 Dock / 启动台打开时**不会继承终端里的环境变量**：公司网络需要代理时，请在系统层面配置代理，或从终端启动桌面端，否则上报会失败（`doctor` 中表现为"网络不通"）。
+桌面端从 Dock / 启动台打开时**不会继承终端里的环境变量**：公司网络需要代理时，请在系统层面配置代理，或从终端启动桌面端，否则上报会失败（`doctor` 中表现为"网络不通"）。
 
 ### 2. 审批 hook
 
