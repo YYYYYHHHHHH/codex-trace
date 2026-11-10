@@ -136,7 +136,7 @@ capture_content = false   # 默认不上传 prompt / 工具输出原文
 2. ✅ ID 方案已定（payload-notes 第 5 节）。spool 记录 = 原始 payload + 接收时间；关联逻辑放在上传进程。
 3. ✅ 插件与 Go 版 `trace-hook` 已完成（2026-11-09）。上报接口改为 OTLP（Langfuse Cloud 2026-11-16 起旧 ingestion 接口停止接收 trace），凭证改为构建时内置，详见 [PLAN.md](PLAN.md) 第 2 节。
 4. ✅ 本机 E2E 已通过：本地假接收器（`make e2e`）与真实 Langfuse（`make e2e-langfuse`、`make smoke`，2026-11-10）。结论见 [otel-mapping.md](otel-mapping.md)。
-5. ⏳ 小范围客户试点；发布到私有 git marketplace（`release` 分支，见 [operations.md](operations.md)）。接入文档已完成：[install.md](install.md)。
+5. ✅ 已发布到公开 git marketplace（`release` 分支，v0.1.0，见 [operations.md](operations.md)）；⏳ 小范围客户试点。接入文档已完成：[install.md](install.md)。
 
 ## 8.1 新发现：hook 信任机制（影响分发）
 

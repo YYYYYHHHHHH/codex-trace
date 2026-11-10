@@ -1,7 +1,7 @@
 # codex-trace 交付计划
 
 > 编写日期：2026-11-09
-> 状态：**M0–M7 全部完成，真实 Langfuse 验收通过**（2026-11-10）。待办：客户试点、发布到私有 git marketplace。
+> 状态：**M0–M7 全部完成，真实 Langfuse 验收通过**（2026-11-10）。已发布到公开 git marketplace `YYYYYHHHHHH/codex-trace@release`（v0.1.0）。待办：客户试点。
 > 使用对象：**内部客户**。
 > 前置文档：[HANDOFF.md](HANDOFF.md)（背景与原始决策）、[payload-notes.md](payload-notes.md)（实测结论）
 
@@ -98,7 +98,7 @@ enabled         = true         # false 等同于 pause
 ### 3.1 内置凭证的安全约束
 
 - **源码中不出现 key**：`make dist` 从 `~/.config/codex-trace/build.env`（权限 600，不入库）读取并通过 `-ldflags -X` 注入；未提供时构建出的二进制没有内置凭证，行为等同"未配置"（静默不采集）。
-- **marketplace 仓库必须私有**：内置 key 可被 `strings` 提取，拿到插件 = 拿到 project 读写权限。
+- ~~marketplace 仓库必须私有~~：内置 key 可被 `strings` 提取，拿到插件 = 拿到 project 读写权限。2026-11-10 起仓库公开，用户明确接受内置 key 可被任何人提取的风险（可读写、删除该 Langfuse project 的数据），并决定不轮换 key。
 - **专用 Langfuse project**：只存 Codex 调用链；`capture_content=false` 降低泄漏后的数据敏感度。
 - **轮换流程**（按需手动执行，无定时吊销）：Langfuse 新建 key → 重新 `make dist` → 发布新版本 → 客户 `codex plugin marketplace upgrade`（并重新审批 hook）→ 确认新版本已铺开后，由你决定何时吊销旧 key。写入 `docs/operations.md`。
 - **出口可迁移**：上报地址与鉴权方式集中在 `internal/uploader` 的一处配置，将来改走网关（方案 B）只需换构建参数。
@@ -232,6 +232,6 @@ CODEX_TRACE_ENVIRONMENT=codex-trace-dev
 | Codex hook / rollout 格式随版本变化（当前为 alpha 版） | payload 与 rollout 解析容错（未知字段忽略、缺字段降级）；事件里带 Codex 版本便于排查；fixture 按版本归档 |
 | 插件升级需重新审批 hook，客户可能没注意到导致静默停采 | `status` / `doctor` 显示"最近一次 hook 触发时间"；企业客户推荐托管下发 |
 | macOS Gatekeeper 拦截未签名二进制 | M6 实测；git 克隆的文件通常不带 quarantine 属性，若被拦则在文档中给出处理方式，并记录签名需求 |
-| 内置 key 随插件泄漏（仓库被误公开、客户转发插件） | 私有仓库 + 专用 project + 默认不传内容；按 3.1 节流程轮换；必要时迁移到网关方案 B |
+| 内置 key 随插件泄漏（仓库已公开，**风险已接受**） | 默认不传内容；发现滥用时按 3.1 节流程轮换；长期可迁移到只写网关方案 B |
 | 装完即自动上报，客户未充分知情 | 插件描述与 `install.md` 首段写明采集内容；`docs/data-collection.md` 供客户合规评审；提供 `pause` 和 `enabled=false` |
 | 后台上传进程被系统或用户杀掉 | spool 持久化，下次 hook 触发时自动重新拉起，不丢数据 |
