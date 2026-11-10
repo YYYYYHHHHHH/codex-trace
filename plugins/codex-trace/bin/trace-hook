@@ -1,19 +1,30 @@
 #!/bin/sh
 # 按平台选择 trace-hook 二进制。找不到可用二进制时：hook 调用静默退出（不影响 Codex），其他命令报错。
-# 只 fork 一次 uname：hook 每次工具调用都会执行，启动开销要尽量小。
+# hook 每次工具调用都会执行，启动开销要尽量小：优先用 bash 自带的 OSTYPE / HOSTTYPE
+# （macOS 的 /bin/sh 即 bash，省去一次 fork），对应二进制不存在时再退回 uname。
 dir=${0%/*}
-read -r os arch <<UNAME
+
+normalize() {
+  case "$1" in
+    Darwin | darwin*) os=darwin ;;
+    Linux | linux*) os=linux ;;
+    *) os=$1 ;;
+  esac
+  case "$2" in
+    x86_64 | amd64) arch=amd64 ;;
+    arm64 | aarch64) arch=arm64 ;;
+    *) arch=$2 ;;
+  esac
+  bin="$dir/$os-$arch/trace-hook"
+}
+
+normalize "${OSTYPE-}" "${HOSTTYPE-}"
+if [ ! -x "$bin" ]; then
+  read -r sys mach <<UNAME
 $(uname -sm)
 UNAME
-case "$os" in
-  Darwin) os=darwin ;;
-  Linux) os=linux ;;
-esac
-case "$arch" in
-  x86_64 | amd64) arch=amd64 ;;
-  arm64 | aarch64) arch=arm64 ;;
-esac
-bin="$dir/$os-$arch/trace-hook"
+  normalize "$sys" "$mach"
+fi
 if [ -x "$bin" ]; then
   exec "$bin" "$@"
 fi
