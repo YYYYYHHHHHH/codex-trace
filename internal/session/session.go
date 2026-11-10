@@ -76,18 +76,19 @@ type File struct {
 // SpawnRef 记录一次 spawn_agent 调用，用于把子 agent 挂到它下面。
 // 独立于轮次保存：父轮次可能先于子 agent 发出并被释放。
 type SpawnRef struct {
-	ToolUseID string    `json:"tool_use_id"`
-	At        time.Time `json:"at"`
+	ToolUseID  string    `json:"tool_use_id"`
+	RootTurnID string    `json:"root_turn_id"` // 发起 spawn 的轮次所在 trace 的根轮次
+	At         time.Time `json:"at"`
 }
 
 // State 是一个会话的全部关联状态。
 type State struct {
-	SessionID    string               `json:"session_id"`
-	Turns        map[string]*Turn     `json:"turns"`
-	Emitted      map[string]time.Time `json:"emitted"`
-	Files        map[string]*File     `json:"files"`
-	Spawns       map[string]SpawnRef  `json:"spawns"` // task_name → spawn 调用
-	LastActivity time.Time            `json:"last_activity"`
+	SessionID    string                `json:"session_id"`
+	Turns        map[string]*Turn      `json:"turns"`
+	Emitted      map[string]time.Time  `json:"emitted"`
+	Files        map[string]*File      `json:"files"`
+	Spawns       map[string][]SpawnRef `json:"spawns"` // task_name → spawn 调用（同名可能多次）
+	LastActivity time.Time             `json:"last_activity"`
 }
 
 // New 创建空状态。
@@ -108,7 +109,7 @@ func (s *State) ensureMaps() {
 		s.Files = map[string]*File{}
 	}
 	if s.Spawns == nil {
-		s.Spawns = map[string]SpawnRef{}
+		s.Spawns = map[string][]SpawnRef{}
 	}
 }
 
@@ -156,7 +157,7 @@ func (s *State) Apply(rec event.Record, p event.Payload) {
 			if strings.HasSuffix(tool.Name, "spawn_agent") {
 				tool.SpawnTask = spawnTaskName(tool.Response)
 				if tool.SpawnTask != "" {
-					s.Spawns[tool.SpawnTask] = SpawnRef{ToolUseID: tool.ID, At: at}
+					s.addSpawn(tool.SpawnTask, SpawnRef{ToolUseID: tool.ID, RootTurnID: t.rootID(), At: at})
 				}
 			}
 		}
@@ -209,13 +210,36 @@ func (s *State) OpenMainTurn() *Turn {
 	return best
 }
 
-// SpawnToolForTask 查找返回了指定 task_name 的 spawn_agent 调用。
-func (s *State) SpawnToolForTask(task string) (string, bool) {
-	ref, ok := s.Spawns[task]
-	if !ok || task == "" {
-		return "", false
+// SpawnFor 查找某个子 agent 对应的 spawn 调用：task_name 相同、且在子 agent 开始之前最近的一次。
+func (s *State) SpawnFor(task string, agentStart time.Time) (SpawnRef, bool) {
+	var best SpawnRef
+	found := false
+	for _, ref := range s.Spawns[task] {
+		if ref.At.After(agentStart) {
+			continue
+		}
+		if !found || ref.At.After(best.At) {
+			best, found = ref, true
+		}
 	}
-	return ref.ToolUseID, true
+	return best, found
+}
+
+func (s *State) addSpawn(task string, ref SpawnRef) {
+	for _, r := range s.Spawns[task] {
+		if r.ToolUseID == ref.ToolUseID {
+			return // 重放
+		}
+	}
+	s.Spawns[task] = append(s.Spawns[task], ref)
+}
+
+// rootID 是该轮次所在 trace 的根轮次（尽力而为，rollout 事实优先）。
+func (t *Turn) rootID() string {
+	if t.IsSubagent() {
+		return t.FallbackRootTurnID
+	}
+	return t.ID
 }
 
 // File 返回某个 rollout 文件的扫描状态（不存在则创建）。
@@ -232,6 +256,9 @@ func (s *State) File(path string) *File {
 func (s *State) MergeScan(path string, res rollout.Result, now time.Time) {
 	f := s.File(path)
 	for id, tf := range res.Turns {
+		if _, done := s.Emitted[id]; done {
+			continue // 已发出轮次的迟到记录
+		}
 		f.Turns[id] = rollout.Merge(f.Turns[id], tf)
 	}
 	for id, m := range res.Metas {
@@ -272,12 +299,38 @@ func (s *State) Prune(now time.Time, retention time.Duration) bool {
 			delete(s.Files, path)
 		}
 	}
-	for task, ref := range s.Spawns {
-		if now.Sub(ref.At) > retention {
+	for task, refs := range s.Spawns {
+		kept := refs[:0]
+		for _, ref := range refs {
+			if now.Sub(ref.At) <= retention {
+				kept = append(kept, ref)
+			}
+		}
+		if len(kept) == 0 {
 			delete(s.Spawns, task)
+		} else {
+			s.Spawns[task] = kept
 		}
 	}
+	s.pruneOrphanFacts(now, orphanFactsMaxAge)
 	return len(s.Turns) == 0 && len(s.Emitted) == 0 && now.Sub(s.LastActivity) > retention
+}
+
+// orphanFactsMaxAge：已结束、但没有对应 hook 轮次的 rollout 事实保留多久
+// （来自安装前的历史，或子 agent rollout 中复制的父历史）。
+const orphanFactsMaxAge = 10 * time.Minute
+
+func (s *State) pruneOrphanFacts(now time.Time, maxAge time.Duration) {
+	for _, f := range s.Files {
+		for id, tf := range f.Turns {
+			if _, live := s.Turns[id]; live {
+				continue
+			}
+			if (tf.Completed || tf.Aborted) && !tf.CompletedAt.IsZero() && now.Sub(tf.CompletedAt) > maxAge {
+				delete(f.Turns, id)
+			}
+		}
+	}
 }
 
 func (s *State) fileInUse(path string) bool {

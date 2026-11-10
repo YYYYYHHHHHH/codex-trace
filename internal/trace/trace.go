@@ -41,6 +41,7 @@ type Context struct {
 	Parent       otlp.SpanID // 子 agent 的父 span；主轮次为零值
 	AgentPath    string
 	AgentNick    string
+	Partial      bool // 等待 rollout 超时，事实可能不完整
 }
 
 // HashID 把用户 / 机器标识单向哈希后再上传。
@@ -102,6 +103,9 @@ func buildTurnSpan(t session.Turn, f rollout.TurnFacts, c Context, p Policy) otl
 	tags := []string{"codex"}
 	if t.IsSubagent() {
 		tags = append(tags, "subagent")
+	}
+	if c.Partial {
+		tags = append(tags, "partial")
 	}
 	switch {
 	case t.Close == session.CloseInterrupt || f.Aborted:
@@ -179,6 +183,9 @@ func buildToolSpan(tool session.Tool, f rollout.TurnFacts, parent otlp.Span, p P
 	if hasItem && !item.CompletedAt.IsZero() {
 		end = item.CompletedAt
 	}
+	if start.IsZero() {
+		start = parent.Start
+	}
 	if end.IsZero() {
 		end = parent.End
 	}
@@ -233,7 +240,7 @@ func buildGenerationSpan(g rollout.Generation, model, effort string, parent otlp
 	u := g.Usage
 	// Codex 的 input_tokens 含缓存命中部分；Langfuse 的 input 按非缓存部分计费。
 	usage, _ := json.Marshal(map[string]int64{
-		"input":                    u.Input - u.CachedInput,
+		"input":                    max(u.Input-u.CachedInput, 0),
 		"input_cached_tokens":      u.CachedInput,
 		"input_cache_write_tokens": u.CacheWriteInput,
 		"output":                   u.Output,
@@ -254,13 +261,17 @@ func buildGenerationSpan(g rollout.Generation, model, effort string, parent otlp
 		params, _ := json.Marshal(map[string]string{"reasoning_effort": effort})
 		attrs = append(attrs, otlp.String(attrObsModelParam, string(params)))
 	}
+	start, end := g.Start, g.End
+	if end.IsZero() { // rollout 时间戳无法解析时退回到父 span 的时间范围
+		start, end = parent.Start, parent.End
+	}
 	return otlp.Span{
 		TraceID: parent.TraceID,
 		SpanID:  otlp.NewSpanID(KindGeneration, g.ResponseID),
 		Parent:  parent.SpanID,
 		Name:    firstNonEmpty(model, "model"),
-		Start:   g.Start,
-		End:     notBefore(g.End, g.Start),
+		Start:   start,
+		End:     notBefore(end, start),
 		Attrs:   attrs,
 	}
 }

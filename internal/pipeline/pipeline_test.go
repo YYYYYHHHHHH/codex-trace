@@ -257,7 +257,12 @@ func TestStaleOpenTurnIsClosedAsIncomplete(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	spans := p.Flush(recs[1].ReceivedAt.Add(DefaultStaleAfter + time.Minute))
+	now := recs[1].ReceivedAt.Add(DefaultStaleAfter + time.Minute)
+	if spans := p.Flush(now); len(spans) != 0 {
+		t.Fatal("Flush alone must not close stale turns (spool may still hold the Stop)")
+	}
+	p.CloseStale(now)
+	spans := p.Flush(now)
 	if len(spans) != 1 {
 		t.Fatalf("stale turn should be emitted, got %d spans", len(spans))
 	}
@@ -328,5 +333,92 @@ func TestLoadAllDropsCorruptState(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "bad.json")); !os.IsNotExist(err) {
 		t.Error("corrupt state file should be removed")
+	}
+}
+
+func TestCloseStaleRespectsRecentTranscriptWrites(t *testing.T) {
+	root, recs := loadFixture(t, "interrupted")
+	p := newProcessor(t, root, session.NewStore(t.TempDir()), trace.Policy{})
+	for _, r := range recs[:2] {
+		if err := p.Ingest(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// rollout 刚被写过：长命令仍在运行
+	files, _ := filepath.Glob(filepath.Join(root, "rollout-*.jsonl"))
+	now := recs[1].ReceivedAt.Add(DefaultStaleAfter + time.Minute)
+	_ = os.Chtimes(files[0], now, now)
+	t.Cleanup(func() { _ = os.Chtimes(files[0], recs[1].ReceivedAt, recs[1].ReceivedAt) })
+
+	p.CloseStale(now)
+	if spans := p.Flush(now); len(spans) != 0 {
+		t.Error("turn with a recently written transcript must not be closed as stale")
+	}
+}
+
+func TestDiscardDropsUncommittedEmission(t *testing.T) {
+	root, recs := loadFixture(t, "interrupted")
+	store := session.NewStore(t.TempDir())
+	p := newProcessor(t, root, store, trace.Policy{})
+	ingestAll(t, p, recs)
+	now := recs[len(recs)-1].ReceivedAt.Add(time.Minute)
+	if len(p.Flush(now)) == 0 {
+		t.Fatal("expected spans")
+	}
+
+	p.Discard() // 模拟写 outbox 失败
+
+	ingestAll(t, p, recs) // spool 未删除，下轮重放
+	if len(p.Flush(now)) == 0 {
+		t.Error("after Discard the turn must be emitted again on replay")
+	}
+}
+
+func TestMaxWaitEmissionIsTaggedPartial(t *testing.T) {
+	root, recs := loadFixture(t, "interrupted")
+	p := New(Options{
+		Store:        session.NewStore(t.TempDir()),
+		AllowedRoots: []string{root},
+		Scan:         func(string, int64) (rolloutResult, error) { return rolloutResult{}, nil }, // rollout 迟迟没有收尾记录
+	})
+	ingestAll(t, p, recs)
+	last := recs[len(recs)-1].ReceivedAt
+
+	if spans := p.Flush(last.Add(5 * time.Second)); len(spans) != 0 {
+		t.Fatal("must wait up to MaxWait for rollout")
+	}
+	spans := p.Flush(last.Add(DefaultMaxWait + time.Second))
+	if len(spans) != 1 {
+		t.Fatalf("spans = %d", len(spans))
+	}
+	tags, _ := attr(spans[0], "langfuse.trace.tags")
+	if !strings.Contains(strings.Join(tags.Value.AsStrings(), ","), "partial") {
+		t.Errorf("tags = %v", tags.Value.AsStrings())
+	}
+}
+
+func TestSubagentWithoutFactsStillJoinsParentTrace(t *testing.T) {
+	root, recs := loadFixture(t, "subagent-resume")
+	// 只扫描主会话 rollout；子 agent rollout 读不到（例如权限问题）
+	p := New(Options{
+		Store:        session.NewStore(t.TempDir()),
+		AllowedRoots: []string{root},
+		Scan: func(path string, off int64) (rolloutResult, error) {
+			if strings.Contains(path, "dc997b56528e") {
+				return rolloutResult{}, os.ErrPermission
+			}
+			return scanForTest(path, off)
+		},
+	})
+	ingestAll(t, p, recs)
+	spans := p.Flush(recs[len(recs)-1].ReceivedAt.Add(time.Minute))
+	idx := index(spans)
+
+	sub, main1 := idx[trace.TurnSpanID(subTurn)], idx[trace.TurnSpanID(turn1)]
+	if sub.TraceID != main1.TraceID {
+		t.Error("subagent without rollout facts must still join the parent trace")
+	}
+	if sub.Parent.IsZero() {
+		t.Error("subagent must have a parent span")
 	}
 }

@@ -33,6 +33,9 @@ func Merge(a, b TurnFacts) TurnFacts {
 	}
 	out.Completed = a.Completed || b.Completed
 	out.Aborted = a.Aborted || b.Aborted
+	if b.LastRecordAt.After(out.LastRecordAt) {
+		out.LastRecordAt = b.LastRecordAt
+	}
 
 	seen := make(map[string]bool, len(a.Generations))
 	out.Generations = make([]Generation, 0, len(a.Generations)+len(b.Generations))
@@ -40,11 +43,16 @@ func Merge(a, b TurnFacts) TurnFacts {
 		seen[g.ResponseID] = true
 		out.Generations = append(out.Generations, g)
 	}
-	for _, g := range b.Generations {
-		if !seen[g.ResponseID] {
-			seen[g.ResponseID] = true
-			out.Generations = append(out.Generations, g)
+	for i, g := range b.Generations {
+		if seen[g.ResponseID] {
+			continue
 		}
+		// 新一次扫描中的第一条 generation 没有"上一条记录"，用上次扫描的最后记录时间补上
+		if i == 0 && g.Start.Equal(g.End) && !a.LastRecordAt.IsZero() && a.LastRecordAt.Before(g.End) {
+			g.Start = a.LastRecordAt
+		}
+		seen[g.ResponseID] = true
+		out.Generations = append(out.Generations, g)
 	}
 	return out
 }

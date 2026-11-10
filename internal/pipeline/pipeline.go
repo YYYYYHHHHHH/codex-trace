@@ -3,6 +3,7 @@ package pipeline
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -48,6 +49,9 @@ type Options struct {
 }
 
 // Processor 在内存中缓存会话状态，Commit 时落盘。非并发安全：只在单实例上传进程中使用。
+//
+// 调用约定：Ingest* → [CloseStale] → Flush → 持久化返回的 span → Commit。
+// span 持久化失败时必须调用 Discard，丢弃内存中的变更（spool 保留，下次重放）。
 type Processor struct {
 	opts     Options
 	sessions map[string]*session.State
@@ -124,6 +128,47 @@ func (p *Processor) load(id string) (*session.State, error) {
 	return st, nil
 }
 
+// Discard 丢弃未提交的内存状态，下次访问时从存储重新载入。
+func (p *Processor) Discard() {
+	p.sessions = map[string]*session.State{}
+	p.dirty = map[string]bool{}
+	p.deleted = map[string]bool{}
+}
+
+// CloseStale 把长时间没有活动的未结束轮次标记为"未完成"。
+// 只应在 spool 已读空时调用，否则积压中的 Stop 尚未应用，会被误判。
+// 活动同时参考 hook 事件与 transcript 文件的修改时间（长命令期间 rollout 仍在写入）。
+func (p *Processor) CloseStale(now time.Time) {
+	for _, st := range p.sessions {
+		for _, t := range st.Turns {
+			if t.Closed() {
+				continue
+			}
+			last := t.LastActivity
+			if mt := p.transcriptModTime(t.TranscriptPath); mt.After(last) {
+				last = mt
+			}
+			if now.Sub(last) > p.opts.StaleAfter {
+				t.Close = session.CloseStale
+				t.ClosedAt = last.Add(p.opts.StaleAfter) // 判定为过期的时刻，使其可在本次收尾
+				p.dirty[st.SessionID] = true
+			}
+		}
+	}
+}
+
+func (p *Processor) transcriptModTime(path string) time.Time {
+	resolved, ok := p.resolveTranscript(path)
+	if !ok {
+		return time.Time{}
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime()
+}
+
 // Flush 收尾所有可以发出的轮次并返回 span。
 func (p *Processor) Flush(now time.Time) []otlp.Span {
 	var spans []otlp.Span
@@ -170,14 +215,6 @@ func (p *Processor) Commit() error {
 }
 
 func (p *Processor) flushSession(st *session.State, now time.Time) []otlp.Span {
-	for _, t := range st.Turns {
-		if !t.Closed() && now.Sub(t.LastActivity) > p.opts.StaleAfter {
-			t.Close = session.CloseStale
-			t.ClosedAt = t.LastActivity.Add(p.opts.StaleAfter) // 判定为过期的时刻，使其可在本次收尾
-			p.dirty[st.SessionID] = true
-		}
-	}
-
 	cands := p.candidates(st, now)
 	if len(cands) > 0 {
 		p.scanTranscripts(st, cands, now)
@@ -193,7 +230,12 @@ func (p *Processor) flushSession(st *session.State, now time.Time) []otlp.Span {
 		if !finished && now.Sub(t.ClosedAt) < p.opts.MaxWait {
 			continue
 		}
-		spans = append(spans, trace.BuildTurn(*t, facts, p.context(st, t, facts), p.opts.Policy)...)
+		c := p.context(st, t, facts)
+		if !finished {
+			c.Partial = true
+			p.opts.Logf("轮次 %s 等待 rollout 超时，按已有信息发出", t.ID)
+		}
+		spans = append(spans, trace.BuildTurn(*t, facts, c, p.opts.Policy)...)
 		st.MarkEmitted(t, now)
 		p.dirty[st.SessionID] = true
 	}
@@ -276,17 +318,21 @@ func (p *Processor) context(st *session.State, t *session.Turn, f rollout.TurnFa
 		c.TraceKey = firstNonEmpty(f.RootTurnID, t.ID)
 		return c
 	}
-	c.TraceKey = firstNonEmpty(f.RootTurnID, t.FallbackRootTurnID, t.ID)
+	var spawn session.SpawnRef
+	var hasSpawn bool
 	if m, ok := st.Meta(t.AgentID); ok {
 		c.AgentPath, c.AgentNick = m.AgentPath, m.AgentNickname
 		if c.CodexVersion == "" {
 			c.CodexVersion = m.CLIVersion
 		}
-		if toolID, ok := st.SpawnToolForTask(m.AgentPath); ok {
-			c.Parent = trace.ToolSpanID(toolID)
-		}
+		spawn, hasSpawn = st.SpawnFor(m.AgentPath, t.Start)
 	}
-	if c.Parent.IsZero() && c.TraceKey != t.ID {
+	// 根轮次：rollout 记录 > spawn 所在 trace > SubagentStart 时正在进行的主轮次 > 自身
+	c.TraceKey = firstNonEmpty(f.RootTurnID, spawn.RootTurnID, t.FallbackRootTurnID, t.ID)
+	switch {
+	case hasSpawn:
+		c.Parent = trace.ToolSpanID(spawn.ToolUseID)
+	case c.TraceKey != t.ID:
 		c.Parent = trace.TurnSpanID(c.TraceKey)
 	}
 	return c

@@ -52,6 +52,8 @@ type TurnFacts struct {
 	AbortReason  string
 	Generations  []Generation
 	Items        map[string]Item // 按 item id（= hook 的 tool_use_id）
+	// LastRecordAt 是本轮次最后一条记录的时间，用于跨扫描估算下一次 generation 的开始时间。
+	LastRecordAt time.Time
 }
 
 // Generation 对应一次模型调用（token_usage_record）。
@@ -362,6 +364,7 @@ func (b *builder) addItem(turnID string, raw json.RawMessage) {
 func (b *builder) result(offset int64) Result {
 	turns := make(map[string]TurnFacts, len(b.turns))
 	for id, tf := range b.turns {
+		tf.LastRecordAt = b.lastTs[id]
 		turns[id] = *tf
 	}
 	return Result{Metas: b.metas, Turns: turns, Offset: offset}

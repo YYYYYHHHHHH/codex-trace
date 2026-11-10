@@ -82,15 +82,15 @@ func TestSubagentTurnLinking(t *testing.T) {
 	if !sub.IsSubagent() || sub.FallbackRootTurnID != "main" || sub.TranscriptPath != "/sub.jsonl" || sub.Close != CloseSubagentStop {
 		t.Errorf("subagent turn wrong: %+v", sub)
 	}
-	if id, ok := s.SpawnToolForTask("/root/x"); !ok || id != "spawn1" {
-		t.Errorf("SpawnToolForTask = %q, %v", id, ok)
+	if ref, ok := s.SpawnFor("/root/x", sub.Start); !ok || ref.ToolUseID != "spawn1" || ref.RootTurnID != "main" {
+		t.Errorf("SpawnFor = %+v, %v", ref, ok)
 	}
 	s.MarkEmitted(s.Turns["main"], t0)
-	if id, ok := s.SpawnToolForTask("/root/x"); !ok || id != "spawn1" {
+	if ref, ok := s.SpawnFor("/root/x", sub.Start); !ok || ref.ToolUseID != "spawn1" {
 		t.Error("spawn link must survive the parent turn being emitted")
 	}
-	if _, ok := s.SpawnToolForTask(""); ok {
-		t.Error("empty task must not match")
+	if _, ok := s.SpawnFor("", sub.Start); ok {
+		t.Error("unknown task must not match")
 	}
 }
 
@@ -207,5 +207,49 @@ func TestStoreLoadCorruptFile(t *testing.T) {
 	}
 	if ids, _ := NewStore(filepath.Join(dir, "missing")).List(); len(ids) != 0 {
 		t.Error("missing dir should list nothing")
+	}
+}
+
+func TestSpawnForPicksLatestSpawnBeforeAgentStart(t *testing.T) {
+	s := New("s")
+	spawn := func(at time.Duration, id string) {
+		apply(s, at, event.Payload{HookEventName: event.PostToolUse, TurnID: "main", ToolUseID: id,
+			ToolName: "collaborationspawn_agent", ToolResponse: json.RawMessage(`"{\"task_name\":\"/root/w\"}"`)})
+	}
+	spawn(1*time.Second, "first")
+	spawn(5*time.Second, "second")
+	spawn(5*time.Second, "second") // 重放
+
+	if ref, _ := s.SpawnFor("/root/w", t0.Add(3*time.Second)); ref.ToolUseID != "first" {
+		t.Errorf("agent started at 3s should link to first spawn, got %q", ref.ToolUseID)
+	}
+	if ref, _ := s.SpawnFor("/root/w", t0.Add(6*time.Second)); ref.ToolUseID != "second" {
+		t.Errorf("agent started at 6s should link to second spawn, got %q", ref.ToolUseID)
+	}
+	if len(s.Spawns["/root/w"]) != 2 {
+		t.Errorf("replayed spawn must not duplicate: %+v", s.Spawns["/root/w"])
+	}
+}
+
+func TestMergeScanSkipsEmittedAndPrunesOrphans(t *testing.T) {
+	s := New("s")
+	s.Emitted["done"] = t0
+	s.MergeScan("/r.jsonl", rollout.Result{Turns: map[string]rollout.TurnFacts{
+		"done":    {TurnID: "done", Completed: true},
+		"history": {TurnID: "history", Completed: true, CompletedAt: t0},
+		"future":  {TurnID: "future"},
+	}}, t0)
+	f := s.Files["/r.jsonl"]
+	if _, ok := f.Turns["done"]; ok {
+		t.Error("facts for emitted turns must be skipped")
+	}
+
+	s.Prune(t0.Add(time.Hour), 24*time.Hour)
+
+	if _, ok := f.Turns["history"]; ok {
+		t.Error("finished orphan facts should be pruned")
+	}
+	if _, ok := f.Turns["future"]; !ok {
+		t.Error("unfinished facts (turn may not have hooked yet) must be kept")
 	}
 }

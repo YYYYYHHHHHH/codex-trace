@@ -45,3 +45,13 @@ func TestMergeIntoEmpty(t *testing.T) {
 		t.Errorf("merge into empty = %+v", got)
 	}
 }
+
+func TestMergeFillsGenerationStartAcrossScans(t *testing.T) {
+	t0 := time.Unix(100, 0)
+	a := TurnFacts{LastRecordAt: t0}
+	b := TurnFacts{Generations: []Generation{{ResponseID: "r", Start: t0.Add(time.Second), End: t0.Add(time.Second)}}, LastRecordAt: t0.Add(time.Second)}
+	got := Merge(a, b)
+	if !got.Generations[0].Start.Equal(t0) || !got.LastRecordAt.Equal(t0.Add(time.Second)) {
+		t.Errorf("generation start / last record = %v / %v", got.Generations[0].Start, got.LastRecordAt)
+	}
+}
