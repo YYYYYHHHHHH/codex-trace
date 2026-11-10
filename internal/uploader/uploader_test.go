@@ -305,3 +305,91 @@ func TestOnceModeGivesUpAtDeadlineWhenSpoolIsStuck(t *testing.T) {
 		t.Error("once mode must stop at its deadline")
 	}
 }
+
+func TestPoisonRecordDoesNotBlockSpool(t *testing.T) {
+	e := newEnv(t, "interrupted")
+	// 合法外壳但 payload 不是对象：Decode 失败；再放一条完全损坏的
+	q := queue.New(e.paths.SpoolDir())
+	_, _ = q.Put([]byte(`{"v":1,"received_at":"2026-11-09T10:00:00Z","payload":[1,2]}`), e.clock.Now())
+
+	if err := Run(context.Background(), e.deps(true)); err != nil {
+		t.Fatal(err)
+	}
+	if count(t, e.paths.SpoolDir()) != 0 || len(e.sender.bodies) != 1 {
+		t.Errorf("poison record must be dropped while the rest is delivered: spool=%d sends=%d",
+			count(t, e.paths.SpoolDir()), len(e.sender.bodies))
+	}
+}
+
+func TestCommitFailureRollsBackOutbox(t *testing.T) {
+	e := newEnv(t, "interrupted")
+	// sessions 目录可读不可写：载入成功、保存失败
+	if err := os.MkdirAll(e.paths.SessionsDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(e.paths.SessionsDir(), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(e.paths.SessionsDir(), 0o700) })
+	d := e.deps(true)
+	d.RunFor = 5 * time.Second
+
+	if err := Run(context.Background(), d); err != nil {
+		t.Fatal(err)
+	}
+
+	if n := count(t, e.paths.OutboxDir()); n != 0 {
+		t.Errorf("outbox must be rolled back on commit failure, has %d batches", n)
+	}
+	if len(e.sender.bodies) != 0 || count(t, e.paths.SpoolDir()) == 0 {
+		t.Error("nothing may be sent and spool must be kept")
+	}
+	st, ok, _ := status.Read(e.paths.StatusFile())
+	if !ok || !strings.Contains(st.LastError, "持久化失败") {
+		t.Errorf("failure must be visible in status: %+v", st)
+	}
+}
+
+func TestStorageErrorKeepsRecordsInsteadOfDropping(t *testing.T) {
+	e := newEnv(t, "interrupted")
+	_ = os.MkdirAll(e.paths.StateDir, 0o700)
+	if err := os.WriteFile(e.paths.SessionsDir(), []byte("x"), 0o600); err != nil { // 状态无法读取
+		t.Fatal(err)
+	}
+	d := e.deps(true)
+	d.RunFor = 3 * time.Second
+
+	if err := Run(context.Background(), d); err != nil {
+		t.Fatal(err)
+	}
+
+	st, _, _ := status.Read(e.paths.StatusFile())
+	if st.DroppedEvents != 0 || count(t, e.paths.SpoolDir()) != 3 || st.LastError == "" {
+		t.Errorf("storage errors must keep records for retry: dropped=%d spool=%d err=%q",
+			st.DroppedEvents, count(t, e.paths.SpoolDir()), st.LastError)
+	}
+}
+
+func TestBackoffSurvivesRestart(t *testing.T) {
+	e := newEnv(t, "interrupted")
+	e.sender.results = []exporter.Result{{Outcome: exporter.Retry, Status: 503, RetryAfter: 2 * time.Minute, Err: errors.New("HTTP 503")}}
+	d := e.deps(false)
+	d.IdleExit = time.Second // 退避期间空闲退出
+
+	if err := Run(context.Background(), d); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.sender.bodies) != 1 {
+		t.Fatalf("first run sends = %d", len(e.sender.bodies))
+	}
+
+	// 新进程在退避窗口内启动：不应立即重发
+	d2 := e.deps(false)
+	d2.IdleExit = time.Second
+	if err := Run(context.Background(), d2); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.sender.bodies) != 1 {
+		t.Errorf("restarted uploader must honor persisted backoff, sends = %d", len(e.sender.bodies))
+	}
+}

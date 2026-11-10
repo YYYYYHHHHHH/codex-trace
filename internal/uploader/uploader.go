@@ -9,7 +9,9 @@ package uploader
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"math/rand/v2"
 	"os"
 	"time"
@@ -99,9 +101,7 @@ func Run(ctx context.Context, d Deps) error {
 		st:     status.Status{PID: os.Getpid(), Version: d.Version, StartedAt: d.Now().UTC()},
 	}
 	if prev, ok, _ := status.Read(d.Paths.StatusFile()); ok {
-		r.st.SentSpans, r.st.SentBatches = prev.SentSpans, prev.SentBatches
-		r.st.FailedBatches, r.st.DroppedEvents = prev.FailedBatches, prev.DroppedEvents
-		r.st.RejectedSpans, r.st.LastSendOK = prev.RejectedSpans, prev.LastSendOK
+		r.restore(prev)
 	}
 	if err := d.Processor.LoadAll(); err != nil {
 		d.Logf("载入会话状态失败: %v", err)
@@ -155,22 +155,39 @@ func withDefaults(d Deps) Deps {
 	return d
 }
 
+// restore 继承上一个进程的计数与退避状态：否则服务端故障期间每个新进程都会立刻重试。
+func (r *runner) restore(prev status.Status) {
+	r.st.SentSpans, r.st.SentBatches = prev.SentSpans, prev.SentBatches
+	r.st.FailedBatches, r.st.DroppedEvents = prev.FailedBatches, prev.DroppedEvents
+	r.st.DroppedBatches, r.st.RejectedSpans = prev.DroppedBatches, prev.RejectedSpans
+	r.st.LastSendOK = prev.LastSendOK
+	r.st.LastError, r.st.LastErrorAt = prev.LastError, prev.LastErrorAt
+	if prev.NextRetryAt.After(r.d.Now()) {
+		r.nextRetry = prev.NextRetryAt
+		r.st.NextRetryAt = prev.NextRetryAt
+		r.backoff = min(time.Duration(prev.BackoffSecs)*time.Second, maxBackoff)
+	}
+}
+
 func (r *runner) cycle(ctx context.Context) {
+	defer r.writeStatus()
+	defer r.enforceCaps()
+
 	names, drained := r.ingestSpool()
 	if drained {
 		r.d.Processor.CloseStale(r.d.Now())
 	}
-	spans := r.d.Processor.Flush(r.d.Now())
-	if len(spans) > 0 {
-		if err := r.enqueue(spans); err != nil {
-			r.d.Processor.Discard()
-			r.fail(fmt.Errorf("写 outbox 失败: %w", err))
-			return // 不提交、不删 spool：下次重放
-		}
+	written, err := r.enqueue(r.d.Processor.Flush(r.d.Now()))
+	if err == nil {
+		err = r.d.Processor.Commit()
 	}
-	if err := r.d.Processor.Commit(); err != nil {
+	if err != nil {
+		// 回滚本轮：丢弃内存状态与已写入的 outbox 批次，spool 保留，下轮重放
 		r.d.Processor.Discard()
-		r.fail(fmt.Errorf("保存会话状态失败: %w", err))
+		for _, name := range written {
+			_ = r.outbox.Remove(name)
+		}
+		r.fail(fmt.Errorf("持久化失败，稍后重放: %w", err))
 		return
 	}
 	for _, name := range names {
@@ -179,11 +196,14 @@ func (r *runner) cycle(ctx context.Context) {
 		}
 	}
 	r.send(ctx)
+}
+
+func (r *runner) enforceCaps() {
 	if n, _ := r.outbox.Enforce(OutboxMaxBytes); n > 0 {
+		r.st.DroppedBatches += int64(n)
 		r.d.Logf("outbox 超过上限，丢弃最旧 %d 批", n)
 	}
 	_, _ = r.failed.Enforce(FailedMaxBytes)
-	r.writeStatus()
 }
 
 // ingestSpool 处理一批 spool 记录；drained 表示本次已读到队尾。
@@ -199,21 +219,53 @@ func (r *runner) ingestSpool() (names []string, drained bool) {
 	}
 	names = make([]string, 0, len(entries))
 	for _, e := range entries {
-		names = append(names, e.Name)
 		data, err := r.spool.Read(e.Name)
-		if err != nil {
-			r.dropped(e.Name, err)
+		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
-		rec, err := event.ParseRecord(data)
-		if err == nil {
-			err = r.d.Processor.Ingest(rec)
+		if err != nil { // 瞬时错误（如 EMFILE）：保留记录，下轮再试
+			r.d.Logf("读取 spool 记录 %s 失败，稍后重试: %v", e.Name, err)
+			return names, false
 		}
-		if err != nil {
+		err = r.ingestOne(data)
+		var invalid *invalidRecord
+		switch {
+		case err == nil:
+		case errors.As(err, &invalid):
 			r.dropped(e.Name, err)
+		default: // 存储错误：保留这条及之后的记录，下轮重试
+			r.fail(fmt.Errorf("处理 spool 记录失败，稍后重试: %w", err))
+			return names, false
 		}
+		names = append(names, e.Name)
 	}
 	return names, drained
+}
+
+// invalidRecord 标记记录本身有问题（应丢弃），区别于存储错误（应重试）。
+type invalidRecord struct{ err error }
+
+func (e *invalidRecord) Error() string { return e.err.Error() }
+func (e *invalidRecord) Unwrap() error { return e.err }
+
+// ingestOne 隔离单条记录：解析失败或处理时 panic 都只丢弃这一条，不会卡住整个 spool。
+func (r *runner) ingestOne(data []byte) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			err = &invalidRecord{fmt.Errorf("处理记录时 panic: %v", p)}
+		}
+	}()
+	rec, err := event.ParseRecord(data)
+	if err != nil {
+		return &invalidRecord{err}
+	}
+	if err := r.d.Processor.Ingest(rec); err != nil {
+		if errors.Is(err, pipeline.ErrInvalidRecord) {
+			return &invalidRecord{err}
+		}
+		return err
+	}
+	return nil
 }
 
 func (r *runner) dropped(name string, err error) {
@@ -221,18 +273,22 @@ func (r *runner) dropped(name string, err error) {
 	r.d.Logf("丢弃无效 spool 记录 %s: %v", name, err)
 }
 
-func (r *runner) enqueue(spans []otlp.Span) error {
+// enqueue 把 span 分批写入 outbox，返回已写入的条目名（失败时供回滚）。
+func (r *runner) enqueue(spans []otlp.Span) ([]string, error) {
+	var written []string
 	for start := 0; start < len(spans); start += MaxSpansPerBatch {
 		end := min(start+MaxSpansPerBatch, len(spans))
 		body, err := otlp.Encode(r.d.Resource, scopeName, r.d.Version, spans[start:end])
 		if err != nil {
-			return err
+			return written, fmt.Errorf("编码 span: %w", err)
 		}
-		if _, err := r.outbox.Put(body, r.d.Now()); err != nil {
-			return err
+		name, err := r.outbox.Put(body, r.d.Now())
+		if err != nil {
+			return written, fmt.Errorf("写 outbox: %w", err)
 		}
+		written = append(written, name)
 	}
-	return nil
+	return written, nil
 }
 
 func (r *runner) send(ctx context.Context) {
@@ -249,10 +305,14 @@ func (r *runner) send(ctx context.Context) {
 			return
 		}
 		body, err := r.outbox.Read(e.Name)
-		if err != nil {
-			_ = r.outbox.Remove(e.Name)
+		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
+		if err != nil { // 瞬时错误：保留批次，下轮再试
+			r.d.Logf("读取 outbox 批次 %s 失败，稍后重试: %v", e.Name, err)
+			return
+		}
+		r.heartbeat() // 单批发送最长 30 秒，期间保持心跳，避免 hook 误判后反复拉起进程
 		sendCtx, cancel := context.WithTimeout(ctx, sendTimeout)
 		res := r.d.Sender.Send(sendCtx, body)
 		cancel()
@@ -272,6 +332,7 @@ func (r *runner) send(ctx context.Context) {
 func (r *runner) onSent(name string, body []byte, res exporter.Result) {
 	_ = r.outbox.Remove(name)
 	r.backoff, r.nextRetry = 0, time.Time{}
+	r.st.BackoffSecs = 0
 	r.st.SentBatches++
 	r.st.SentSpans += countSpans(body)
 	r.st.LastSendOK = r.d.Now().UTC()
@@ -288,10 +349,11 @@ func (r *runner) scheduleRetry(res exporter.Result) {
 	r.backoff = min(max(r.backoff*2, minBackoff), maxBackoff)
 	wait := r.backoff + time.Duration(rand.Int64N(int64(r.backoff)/4+1)) // 抖动，避免多台机器同时重试
 	if res.RetryAfter > wait {
-		wait = res.RetryAfter
+		wait = min(res.RetryAfter, maxBackoff)
 	}
 	r.nextRetry = r.d.Now().Add(wait)
 	r.st.NextRetryAt = r.nextRetry.UTC()
+	r.st.BackoffSecs = int64(r.backoff / time.Second)
 	r.fail(res.Err)
 }
 

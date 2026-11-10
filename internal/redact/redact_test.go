@@ -30,6 +30,15 @@ func TestTextRedactsKnownSecretShapes(t *testing.T) {
 		{"cli flag", "mysql --password s3cr3tpass -h db", "s3cr3tpass"},
 		{"cli flag eq", "tool --token=tok_123456789", "tok_123456789"},
 		{"url userinfo", "git clone https://bob:hunter2pass@git.example.com/x.git", "hunter2pass"},
+		{"quoted value with spaces", `password="my pass phrase"`, "my pass phrase"},
+		{"short password", "pwd=abc12", "abc12"},
+		{"json escaped value", `{"pw_secret":"ab\"cd"}`, `ab\"cd`},
+		{"json number", `{"password": 12345678}`, "12345678"},
+		{"google key", "AIzaSyA-FAKEFAKEFAKEFAKEFAKEFAKEFAKE1234", "SyA-FAKEFAKEFAKE"},
+		{"stripe key", "sk_live_FAKE0123456789abcdef", "FAKE0123456789abcdef"},
+		{"npm token", "npm_FAKE0123456789abcdefghijklmnopqrstuv", "FAKE0123456789abcdefghijklmnop"},
+		{"cookie header", "Cookie: session=FAKEsessionvalue; theme=dark", "FAKEsessionvalue"},
+		{"curl basic", "curl -u admin:FAKEpass123 https://x", "FAKEpass123"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -51,10 +60,27 @@ func TestTextKeepsOrdinaryContent(t *testing.T) {
 		"see https://example.com/docs?page=2",
 		"basic information about bearer tokens",
 		"tokens: 5",
+		"max_tokens=100000",
+		`{"input_tokens": 123456, "output_tokens": 42}`,
+		"token_count: 99",
 	} {
 		if out := Text(in); out != in {
 			t.Errorf("ordinary content changed: %q -> %q", in, out)
 		}
+	}
+}
+
+func TestTruncateNegativeMax(t *testing.T) {
+	if got := Truncate("abc", -1); !strings.Contains(got, "truncated 3 bytes") {
+		t.Errorf("Truncate(-1) = %q", got)
+	}
+}
+
+func BenchmarkTextLargeInput(b *testing.B) {
+	in := strings.Repeat("compile step finished with status ok; ", 1<<12) // 约 150KB
+	b.SetBytes(int64(len(in)))
+	for i := 0; i < b.N; i++ {
+		Text(in)
 	}
 }
 

@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"bufio"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -319,8 +320,9 @@ func TestResolveTranscriptRejectsBadPaths(t *testing.T) {
 
 func TestIngestRejectsRecordWithoutSession(t *testing.T) {
 	p := New(Options{Store: session.NewStore(t.TempDir())})
-	if err := p.Ingest(event.Record{Payload: []byte(`{"hook_event_name":"Stop"}`)}); err == nil {
-		t.Error("expected error")
+	err := p.Ingest(event.Record{Payload: []byte(`{"hook_event_name":"Stop"}`)})
+	if !errors.Is(err, ErrInvalidRecord) {
+		t.Errorf("expected ErrInvalidRecord, got %v", err)
 	}
 }
 

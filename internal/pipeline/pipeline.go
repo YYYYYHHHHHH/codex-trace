@@ -2,6 +2,7 @@
 package pipeline
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,6 +27,9 @@ const (
 )
 
 var rolloutName = regexp.MustCompile(`^rollout-[^/]*\.jsonl$`)
+
+// ErrInvalidRecord 表示记录本身无效（应丢弃）；其他错误来自存储，应保留记录稍后重试。
+var ErrInvalidRecord = errors.New("pipeline: invalid record")
 
 // Options 配置 Processor。
 type Options struct {
@@ -90,7 +94,7 @@ func New(opts Options) *Processor {
 func (p *Processor) Ingest(rec event.Record) error {
 	pl, err := rec.Decode()
 	if err != nil {
-		return fmt.Errorf("pipeline: decode record: %w", err)
+		return fmt.Errorf("%w: %v", ErrInvalidRecord, err)
 	}
 	st, err := p.load(pl.SessionID)
 	if err != nil {

@@ -276,8 +276,11 @@ func buildGenerationSpan(g rollout.Generation, model, effort string, parent otlp
 	}
 }
 
+// content 先粗截断到上限的若干倍（控制脱敏开销），再脱敏，最后精确截断。
+// 先脱敏后截断，避免截断恰好切开密钥使其逃过匹配。
 func content(s string, p Policy) string {
-	return redact.Truncate(redact.Text(s), p.MaxFieldBytes)
+	const precut = 4
+	return redact.Truncate(redact.Text(redact.Truncate(s, precut*p.MaxFieldBytes)), p.MaxFieldBytes)
 }
 
 func appendNonEmpty(attrs []otlp.Attr, key, value string) []otlp.Attr {

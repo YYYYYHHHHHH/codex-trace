@@ -76,10 +76,13 @@ func TestSendClassifiesFailures(t *testing.T) {
 		want   Outcome
 	}{
 		{400, Permanent},
-		{401, Permanent},
-		{403, Permanent},
-		{404, Permanent},
 		{413, Permanent},
+		{422, Permanent},
+		{301, Retry},
+		{307, Retry},
+		{401, Retry},
+		{403, Retry},
+		{404, Retry},
 		{408, Retry},
 		{429, Retry},
 		{500, Retry},
@@ -150,5 +153,49 @@ func TestParseRetryAfter(t *testing.T) {
 	}
 	if d := parseRetryAfter(now.Add(30*time.Second).Format(http.TimeFormat), now); d != 30*time.Second {
 		t.Errorf("http date = %v", d)
+	}
+}
+
+func TestSendDoesNotFollowRedirects(t *testing.T) {
+	leaked := false
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			leaked = true
+		}
+	}))
+	defer other.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/steal", http.StatusTemporaryRedirect)
+	}))
+	defer srv.Close()
+
+	res := New(srv.URL, "pk", "sk", srv.Client()).Send(context.Background(), []byte(`{}`))
+
+	if leaked {
+		t.Error("credentials must never follow a redirect")
+	}
+	if res.Outcome != Retry || res.Status != http.StatusTemporaryRedirect {
+		t.Errorf("redirect should be reported as retryable, got %+v", res)
+	}
+}
+
+func TestRetryAfterIsCapped(t *testing.T) {
+	now := time.Now()
+	for _, v := range []string{"9999999999", now.Add(48 * time.Hour).UTC().Format(http.TimeFormat)} {
+		if d := parseRetryAfter(v, now); d != MaxRetryAfter {
+			t.Errorf("Retry-After %q -> %v, want capped at %v", v, d, MaxRetryAfter)
+		}
+	}
+	// 溢出的值被忽略，退回到客户端自己的退避策略
+	if d := parseRetryAfter("99999999999999999999", now); d != 0 {
+		t.Errorf("overflowing Retry-After should be ignored, got %v", d)
+	}
+}
+
+func TestServerMessageIsSanitized(t *testing.T) {
+	msg := "bad\x1b[31m red \u00e9" + strings.Repeat("统", 300)
+	got := sanitize(msg)
+	if strings.ContainsRune(got, 0x1b) || len([]rune(got)) > maxMessageRunes+1 || !strings.HasSuffix(got, "…") {
+		t.Errorf("sanitize = %q", got)
 	}
 }
