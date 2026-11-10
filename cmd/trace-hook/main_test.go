@@ -146,3 +146,28 @@ func TestResourceAttrsHashInstallationID(t *testing.T) {
 		t.Error("host.id missing")
 	}
 }
+
+func TestOpsCommandsRun(t *testing.T) {
+	t.Setenv("CODEX_TRACE_STATE_DIR", t.TempDir())
+	t.Setenv("CODEX_TRACE_CONFIG", filepath.Join(t.TempDir(), "none.toml"))
+	t.Setenv("CODEX_HOME", t.TempDir())
+	for _, args := range [][]string{{"status"}, {"pause"}, {"resume"}, {"config", "show"}} {
+		var stdout, stderr bytes.Buffer
+		if code := run(args, nil, &stdout, &stderr); code != 0 || stdout.Len() == 0 {
+			t.Errorf("%v: code=%d stdout=%q stderr=%q", args, code, stdout.String(), stderr.String())
+		}
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"doctor", "--offline"}, nil, &stdout, &stderr); code != 1 {
+		t.Errorf("doctor without credentials should fail, code=%d", code)
+	}
+	if code := run([]string{"preview"}, nil, &stdout, &stderr); code != 1 {
+		t.Errorf("preview without data should fail, code=%d", code)
+	}
+	if code := run([]string{"config"}, nil, &stdout, &stderr); code != 2 {
+		t.Errorf("config without subcommand code=%d", code)
+	}
+	if code := run([]string{"status", "--nope"}, nil, &stdout, &stderr); code != 2 {
+		t.Errorf("bad flag code=%d", code)
+	}
+}

@@ -18,9 +18,16 @@ import (
 
 const usage = `用法: trace-hook <命令>
 
-  hook <事件名>   Codex hook 入口（由 hooks.json 调用）
-  upload [--once] 后台上传进程（通常由 hook 自动拉起）；--once 处理完现有数据即退出
-  version         显示版本
+  status              查看采集与上传状态
+  doctor [--offline]  逐项诊断（配置、插件审批、hook 触发、上传、Langfuse 连通性）
+  preview [--raw]     查看即将上传 / 最近一次上传的内容
+  pause | resume      暂停 / 恢复采集
+  config show         查看生效配置及来源（密钥打码）
+  version             显示版本
+
+内部命令：
+  hook <事件名>       Codex hook 入口（由 hooks.json 调用）
+  upload [--once]     后台上传进程（通常由 hook 自动拉起）；--once 处理完现有数据即退出
 `
 
 func main() {
@@ -38,6 +45,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 0
 	case "upload":
 		return runUpload(args[1:], stderr)
+	case "status", "doctor", "preview", "pause", "resume", "config":
+		return runOps(args, stdout, stderr)
 	case "version":
 		fmt.Fprintf(stdout, "trace-hook %s\n", buildinfo.Version)
 		return 0
