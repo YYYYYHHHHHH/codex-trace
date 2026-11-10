@@ -19,9 +19,13 @@ codex-trace 是一个 Codex 插件：安装并审批后，自动把你的 Codex 
 ### 1. 添加 marketplace 并安装插件
 
 ```sh
-codex plugin marketplace add <团队提供的 git 仓库地址>
+codex plugin marketplace add YYYYYHHHHHH/codex-trace@release
 codex plugin add codex-trace@codex-trace
 ```
+
+仓库是私有的：需要先获得 `YYYYYHHHHHH/codex-trace` 的读权限，并确保本机 git 能访问 GitHub 私有仓库（例如已执行 `gh auth login`，或配置了 SSH key；SSH 方式可写 `git@github.com:YYYYYHHHHHH/codex-trace.git@release`）。
+
+升级到新版本：`codex plugin marketplace upgrade`，然后在 Codex 中重新审批 hook。
 
 也可以在 Codex 桌面端的插件页面中搜索 "Codex Trace" 安装。
 

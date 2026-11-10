@@ -39,6 +39,8 @@ make dist      # 四平台二进制 → plugins/codex-trace/bin/<os>-<arch>/trac
 
 4. 客户执行 `codex plugin marketplace upgrade` 获取新版本，并**重新审批 hook**。
 
+仓库：私有仓库 `YYYYYHHHHHH/codex-trace`，客户以 `codex plugin marketplace add YYYYYHHHHHH/codex-trace@release` 接入。新增客户时在 GitHub 上给对方仓库读权限。
+
 > marketplace 仓库必须是**私有**的：内置的 secret key 可以从二进制中提取。
 
 ## 2. 凭证轮换
