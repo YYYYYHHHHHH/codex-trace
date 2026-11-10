@@ -3,3 +3,6 @@
 *.log
 .env
 config.local.toml
+*.test
+coverage.out
+/plugins/codex-trace/bin/*-*/
