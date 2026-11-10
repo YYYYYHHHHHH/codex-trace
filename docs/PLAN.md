@@ -5,6 +5,31 @@
 > 使用对象：**内部客户**。
 > 前置文档：[HANDOFF.md](HANDOFF.md)（背景与原始决策）、[payload-notes.md](payload-notes.md)（实测结论）
 
+## 0. 进度（2026-11-09）
+
+| 里程碑 | 状态 | 分支 |
+|---|---|---|
+| M0 采集结论 | ✅ | `hook-payload-capture` |
+| M2 hook 采集端 | ✅ 进程级 p50 3ms；已修完 go / security 评审 | `hook-capture` |
+| M3 关联处理器 | ✅ 真实会话黄金测试；已修完评审 | `correlation` |
+| M4 上传进程 | ✅ 已修完 security 评审 | `uploader`、`uploader-hardening` |
+| M5 运维命令 | ✅ | `ops-commands` |
+| M6 插件打包与本机 E2E | ✅ `make e2e` 全部断言通过（假 OTLP 接收器） | `plugin-package` |
+| M7 交付文档 | ✅ install / data-collection / operations / managed-deployment | `plugin-package` |
+| M1 真实 Langfuse 冒烟 | ⏳ 等 Langfuse 信息 | — |
+| 真实环境 E2E | ⏳ 等 Langfuse 信息 | — |
+
+分支依次叠加，最新分支包含全部提交，由你合入 `main`。`internal/` 总覆盖率 88.9%。
+
+### 已知问题与后续
+
+- **M1 需要验证**：Langfuse 是否按 span id 去重（崩溃重放、重试可能产生重复批次）；`attrs.go` 中的属性名（metadata 前缀、usage_details 键、observation type）是否按预期展示。
+- `PermissionRequest` 事件尚未采到真实样本（`codex exec` 无审批交互），目前只计数。
+- 重放时 `permission_requests` 计数可能偏大（仅影响展示）。
+- Codex 已提供 `PreModelRequest` / `PostModelRequest` / `PreCompact` / `PostCompact` / `SessionEnd` 事件：若 `PostModelRequest` 携带 token 与模型信息，generation 可直接取自 hook，减少对 rollout 的依赖。待采样确认。
+- Windows 不支持（启动脚本依赖 POSIX sh）。
+- 发布构建时 secret 会短暂出现在 `go build` 进程参数中（`-ldflags`），只应在受信构建机上执行。
+
 ## 1. 交付范围
 
 **本次交付 = 在本机端到端跑通，并产出可直接给客户试点的版本。**
