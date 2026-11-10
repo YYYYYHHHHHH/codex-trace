@@ -40,6 +40,13 @@ func runBinary(t *testing.T, bin string, env []string, stdin string, args ...str
 func TestHookBinaryIsSilentAndAlwaysSucceeds(t *testing.T) {
 	bin := buildBinary(t)
 	state := filepath.Join(t.TempDir(), "state")
+	// 新鲜的心跳让 hook 认为上传进程在运行，不去拉起真实的 upload（否则它会消费 spool）
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "upload.heartbeat"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	base := []string{"HOME=" + t.TempDir(), "CODEX_TRACE_STATE_DIR=" + state}
 	configured := append(append([]string{}, base...),
 		"CODEX_TRACE_LANGFUSE_HOST=http://127.0.0.1:1",
@@ -107,5 +114,35 @@ func TestUploaderEnvKeepsOnlyAllowlistedVariables(t *testing.T) {
 	}
 	if strings.Contains(joined, "secret") {
 		t.Errorf("unrelated secrets leaked into uploader env: %v", got)
+	}
+}
+
+func TestUploadWithoutConfigIsNoop(t *testing.T) {
+	t.Setenv("CODEX_TRACE_STATE_DIR", t.TempDir())
+	t.Setenv("CODEX_TRACE_CONFIG", filepath.Join(t.TempDir(), "none.toml"))
+	var stderr bytes.Buffer
+	if code := run([]string{"upload", "--once"}, nil, &bytes.Buffer{}, &stderr); code != 0 {
+		t.Errorf("code = %d stderr=%q", code, stderr.String())
+	}
+	if code := run([]string{"upload", "--bogus"}, nil, &bytes.Buffer{}, &stderr); code != 2 {
+		t.Errorf("bad flag code = %d", code)
+	}
+}
+
+func TestResourceAttrsHashInstallationID(t *testing.T) {
+	home := t.TempDir()
+	_ = os.WriteFile(filepath.Join(home, "installation_id"), []byte("raw-id\n"), 0o600)
+	attrs := resourceAttrs(home)
+	found := false
+	for _, a := range attrs {
+		if a.Key == "host.id" {
+			found = true
+			if a.Value.AsString() == "raw-id" || a.Value.AsString() == "" {
+				t.Errorf("host.id must be hashed, got %q", a.Value.AsString())
+			}
+		}
+	}
+	if !found {
+		t.Error("host.id missing")
 	}
 }

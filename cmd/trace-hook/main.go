@@ -19,6 +19,7 @@ import (
 const usage = `用法: trace-hook <命令>
 
   hook <事件名>   Codex hook 入口（由 hooks.json 调用）
+  upload [--once] 后台上传进程（通常由 hook 自动拉起）；--once 处理完现有数据即退出
   version         显示版本
 `
 
@@ -35,6 +36,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "hook":
 		runHook(args[1:], stdin)
 		return 0
+	case "upload":
+		return runUpload(args[1:], stderr)
 	case "version":
 		fmt.Fprintf(stdout, "trace-hook %s\n", buildinfo.Version)
 		return 0
