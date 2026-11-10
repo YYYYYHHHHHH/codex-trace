@@ -27,7 +27,37 @@ codex plugin add codex-trace@codex-trace
 
 升级到新版本：`codex plugin marketplace upgrade`，然后在 Codex 中重新审批 hook。
 
-也可以在 Codex 桌面端的插件页面中搜索 "Codex Trace" 安装。
+#### 只装了 Codex 桌面端（没有 `codex` 命令）
+
+桌面端与 CLI 共用 `~/.codex/config.toml`，在任一处装好的插件两边都生效。任选一种方式：
+
+**方式 A：用桌面端自带的 CLI（推荐）**
+
+桌面端会在本机放一份 CLI，直接用它执行上面两条命令：
+
+```sh
+CODEX=~/.codex/plugins/.plugin-appserver/codex-cli/bin/codex
+"$CODEX" plugin marketplace add YYYYYHHHHHH/codex-trace@release
+"$CODEX" plugin add codex-trace@codex-trace
+```
+
+找不到这个文件时（桌面端版本不同，路径可能变化），用方式 B。
+
+**方式 B：手动添加 marketplace，再在桌面端安装**
+
+1. 完全退出 Codex 桌面端。
+2. 在 `~/.codex/config.toml` 末尾追加：
+
+   ```toml
+   [marketplaces.codex-trace]
+   source_type = "git"
+   source = "https://github.com/YYYYYHHHHHH/codex-trace.git"
+   ref = "release"
+   ```
+
+3. 重新打开 Codex 桌面端，在插件页面找到 "Codex Trace" 并安装。
+
+两种方式都需要本机 git 能访问这个私有仓库（见上文）。桌面端从 Dock / 启动台打开时**不会继承终端里的环境变量**：公司网络需要代理时，请在系统层面配置代理，或从终端启动桌面端，否则上报会失败（`doctor` 中表现为"网络不通"）。
 
 ### 2. 审批 hook
 
