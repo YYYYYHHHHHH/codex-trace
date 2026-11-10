@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -96,6 +97,24 @@ func TestLauncherFallsBackToUname(t *testing.T) {
 	out, _, code := run(t, t.TempDir(), "", []string{"OSTYPE=bogus", "HOSTTYPE=bogus"}, "/bin/sh", launcher)
 	if code != 0 || strings.TrimSpace(out) != "ok" {
 		t.Errorf("uname fallback failed: code=%d out=%q", code, out)
+	}
+}
+
+// bash 在 UTF-8 环境下会把紧跟在 $var 后面的中文字符当作变量名的一部分（set -u 时直接报错），
+// 所有脚本中紧挨非 ASCII 字符的变量必须写成 ${var}。
+func TestShellScriptsBraceVariablesBeforeNonASCII(t *testing.T) {
+	bad := regexp.MustCompile(`\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7f]`)
+	scripts := []string{"scripts/e2e.sh", "scripts/build-dist.sh", "scripts/capture-hook.sh", "plugins/codex-trace/bin/trace-hook"}
+	for _, rel := range scripts {
+		data, err := os.ReadFile(filepath.Join(repoRoot(t), rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range strings.Split(string(data), "\n") {
+			if bad.MatchString(line) {
+				t.Errorf("%s:%d: 变量紧挨非 ASCII 字符，请改为 ${var}: %s", rel, i+1, strings.TrimSpace(line))
+			}
+		}
 	}
 }
 

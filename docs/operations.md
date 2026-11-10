@@ -106,6 +106,7 @@ enabled = false          # 停用
 ## 5. 数据清理
 
 - 测试数据：按 `langfuse.environment`（如 `codex-trace-dev`、`codex-trace-e2e`）在 Langfuse 中筛选删除。
+- 自行写脚本调用 Langfuse API 时需设置 User-Agent：前置 Cloudflare 会拦截部分默认 UA（如 Python urllib，返回 `403 error code: 1010`）。v4 读接口为 `/api/public/v2/observations`，见 [otel-mapping.md](otel-mapping.md)。
 - 客户本地：卸载插件后删除 `~/.local/state/codex-trace`。
 
 ## 6. 开发
@@ -115,6 +116,8 @@ make test       # 测试
 make vet        # gofmt + go vet
 make cover      # 覆盖率
 make e2e        # 本机端到端：假 OTLP 接收器 + 真实 codex exec 会话（会临时安装 / 卸载插件，消耗少量模型额度）
+make e2e-langfuse  # 同上，但上报到 build.env 中的真实 Langfuse（environment=codex-trace-e2e）并读回校验
+make smoke      # 真实 Langfuse 冒烟：发送 fixture 会话、读回比对、重复发送检查去重（environment 取自 build.env）
 ```
 
 重新采集 hook payload（Codex 升级后核对格式）：`scripts/capture-install.py install`，跑会话后 `uninstall`，见 [payload-notes.md](payload-notes.md)。

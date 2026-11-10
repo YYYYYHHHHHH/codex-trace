@@ -67,7 +67,7 @@ func runUpload(args []string, stderr io.Writer) (code int) {
 	err := uploader.Run(ctx, uploader.Deps{
 		Paths:     p,
 		Processor: proc,
-		Sender:    exporter.New(cfg.Host, cfg.PublicKey, cfg.SecretKey, nil),
+		Sender:    exporter.New(cfg.Host, cfg.PublicKey, cfg.SecretKey, nil).WithUserAgent("codex-trace/" + buildinfo.Version),
 		Resource:  resourceAttrs(codexHome),
 		Version:   buildinfo.Version,
 		Once:      *once,

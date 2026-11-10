@@ -1,7 +1,12 @@
 #!/bin/sh
 # 本机端到端测试：本地假 OTLP 接收器 + 真实 Codex 会话（codex exec）。
 #
-# 流程：启动 fakeotlp → 把插件复制到临时目录，作为独立 marketplace（codex-trace-e2e）构建并安装 →
+# 目标（E2E_TARGET）：
+#   fake（默认）    本地假 OTLP 接收器，用 fakeotlp verify 断言；
+#   langfuse        真实 Langfuse，凭证取自 BUILD_ENV（默认 ~/.config/codex-trace/build.env），
+#                   environment 固定为 codex-trace-e2e，用 lfsmoke verify 从 Langfuse 读回断言。
+#
+# 流程：启动 fakeotlp（fake 模式）→ 把插件复制到临时目录，作为独立 marketplace（codex-trace-e2e）构建并安装 →
 #      跑三段会话（子 agent / resume / 打断）→ 等待上传 → fakeotlp verify 断言调用树 →
 #      卸载并核对 ~/.codex/config.toml 与安装前一致。
 #
@@ -32,15 +37,34 @@ for v in $(env | sed -n 's/^\(CODEX_TRACE_[A-Z_]*\)=.*/\1/p'); do unset "$v"; do
 export CODEX_TRACE_CONFIG="$work/no-user-config.toml"
 export CODEX_TRACE_STATE_DIR="$work/state"
 
-port=$(python3 -I -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
-pk=pk-lf-e2e
-sk=sk-lf-e2e-$(python3 -I -c 'import secrets; print(secrets.token_hex(8))')
+target=${E2E_TARGET:-fake}
+user_build_env=${BUILD_ENV:-$HOME/.config/codex-trace/build.env}
+case "$target" in
+  fake)
+    port=$(python3 -I -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+    pk=pk-lf-e2e
+    sk=sk-lf-e2e-$(python3 -I -c 'import secrets; print(secrets.token_hex(8))')
+    ;;
+  langfuse)
+    [ -f "$user_build_env" ] || { echo "E2E_TARGET=langfuse 需要 $user_build_env" >&2; exit 1; }
+    ;;
+  *)
+    echo "未知 E2E_TARGET=${target}（可选 fake / langfuse）" >&2
+    exit 1
+    ;;
+esac
 
 fake_pid=
 installed=0
 cleaned=0
+completed=0
 cleanup() {
   status=$?
+  # macOS /bin/sh 在顶层展开错误（如 set -u 的未定义变量）后，EXIT trap 中的 $? 为 0；
+  # 没有走到脚本末尾就一律按失败处理，避免测试失败被吞掉。
+  if [ "$completed" != 1 ] && [ "$status" = 0 ]; then
+    status=1
+  fi
   [ "$cleaned" = 1 ] && return
   cleaned=1
   if [ "$installed" = 1 ]; then
@@ -73,10 +97,12 @@ PY
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
-log "启动假 OTLP 接收器 127.0.0.1:$port"
-go build -o "$work/fakeotlp" "$root/tools/fakeotlp"
-"$work/fakeotlp" serve -addr "127.0.0.1:$port" -out "$work/received.jsonl" -user "$pk" -pass "$sk" >"$work/fakeotlp.log" 2>&1 &
-fake_pid=$!
+if [ "$target" = fake ]; then
+  log "启动假 OTLP 接收器 127.0.0.1:$port"
+  go build -o "$work/fakeotlp" "$root/tools/fakeotlp"
+  "$work/fakeotlp" serve -addr "127.0.0.1:$port" -out "$work/received.jsonl" -user "$pk" -pass "$sk" >"$work/fakeotlp.log" 2>&1 &
+  fake_pid=$!
+fi
 
 log "准备临时 marketplace 并构建内置测试凭证的二进制"
 umask 077
@@ -92,12 +118,18 @@ m = json.load(open(src))
 m["name"] = name
 json.dump(m, open(dst, "w"), ensure_ascii=False, indent=2)
 PY
-cat >"$work/build.env" <<EOF
+if [ "$target" = fake ]; then
+  cat >"$work/build.env" <<EOF
 CODEX_TRACE_LANGFUSE_HOST=http://127.0.0.1:$port
 CODEX_TRACE_LANGFUSE_PUBLIC_KEY=$pk
 CODEX_TRACE_LANGFUSE_SECRET_KEY=$sk
 CODEX_TRACE_ENVIRONMENT=codex-trace-e2e
 EOF
+else
+  # 复用真实凭证，只把 environment 改为 codex-trace-e2e，便于在 Langfuse 中筛选清理
+  grep -v '^CODEX_TRACE_ENVIRONMENT=' "$user_build_env" >"$work/build.env"
+  echo "CODEX_TRACE_ENVIRONMENT=codex-trace-e2e" >>"$work/build.env"
+fi
 BUILD_ENV="$work/build.env" VERSION="0.0.0-e2e" OUT_DIR="$mp/plugins/codex-trace/bin" \
   PLATFORMS="$(go env GOOS)/$(go env GOARCH)" "$root/scripts/build-dist.sh"
 
@@ -167,6 +199,14 @@ log "trace-hook status"
 log "trace-hook doctor"
 "$launcher" doctor || true
 
-log "校验调用树"
-"$work/fakeotlp" verify -in "$work/received.jsonl" -min-turns 3 \
-  -expect-subagent -expect-failed-tool -expect-interrupted -no-content
+log "校验调用树（${target}）"
+if [ "$target" = fake ]; then
+  "$work/fakeotlp" verify -in "$work/received.jsonl" -min-turns 3 \
+    -expect-subagent -expect-failed-tool -expect-interrupted -no-content
+else
+  sessions=$(ls "$CODEX_TRACE_STATE_DIR/sessions" | sed -n 's/\.json$//p' | paste -sd, -)
+  echo "会话：$sessions"
+  (cd "$root" && go run ./tools/lfsmoke verify -env "$work/build.env" -session "$sessions" -min-turns 3 \
+    -expect-subagent -expect-failed-tool -expect-interrupted -no-content)
+fi
+completed=1

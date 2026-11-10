@@ -1,11 +1,11 @@
 # codex-trace 交付计划
 
 > 编写日期：2026-11-09
-> 状态：**执行中**（2026-11-09 用户确认）。先完成不依赖 Langfuse 的部分（M0、M2–M7，E2E 用本地假 OTLP 接收器）；Langfuse 信息到位后再做 M1 与真实环境 E2E。
+> 状态：**M0–M7 全部完成，真实 Langfuse 验收通过**（2026-11-10）。待办：客户试点、发布到私有 git marketplace。
 > 使用对象：**内部客户**。
 > 前置文档：[HANDOFF.md](HANDOFF.md)（背景与原始决策）、[payload-notes.md](payload-notes.md)（实测结论）
 
-## 0. 进度（2026-11-09）
+## 0. 进度（2026-11-10）
 
 | 里程碑 | 状态 | 分支 |
 |---|---|---|
@@ -16,14 +16,16 @@
 | M5 运维命令 | ✅ | `ops-commands` |
 | M6 插件打包与本机 E2E | ✅ `make e2e` 全部断言通过（假 OTLP 接收器） | `plugin-package` |
 | M7 交付文档 | ✅ install / data-collection / operations / managed-deployment | `plugin-package` |
-| M1 真实 Langfuse 冒烟 | ⏳ 等 Langfuse 信息 | — |
-| 真实环境 E2E | ⏳ 等 Langfuse 信息 | — |
+| M1 真实 Langfuse 冒烟 | ✅ `make smoke` 全部通过；结论见 [otel-mapping.md](otel-mapping.md) | `langfuse-acceptance` |
+| 真实环境 E2E | ✅ `make e2e-langfuse`：真实 Codex 会话上报到自建 Langfuse v4.77.0 并读回校验，全部通过 | `langfuse-acceptance` |
 
 分支依次叠加，最新分支包含全部提交，由你合入 `main`。`internal/` 总覆盖率 88.9%。
 
 ### 已知问题与后续
 
-- **M1 需要验证**：Langfuse 是否按 span id 去重（崩溃重放、重试可能产生重复批次）；`attrs.go` 中的属性名（metadata 前缀、usage_details 键、observation type）是否按预期展示。
+- ~~M1 需要验证~~：已验证。Langfuse v4 按 span id 去重并保留最新版本；属性映射全部生效；归属属性（session / user / environment）需每个 span 携带，已修正。详见 [otel-mapping.md](otel-mapping.md)。
+- 前置 Cloudflare 会拦截部分默认 User-Agent，exporter 已显式发送 `codex-trace/<版本>`。
+- 验收时 secret key 经过了对话记录，建议轮换后再构建正式发布版本。
 - `PermissionRequest` 事件尚未采到真实样本（`codex exec` 无审批交互），目前只计数。
 - 重放时 `permission_requests` 计数可能偏大（仅影响展示）。
 - Codex 已提供 `PreModelRequest` / `PostModelRequest` / `PreCompact` / `PostCompact` / `SessionEnd` 事件：若 `PostModelRequest` 携带 token 与模型信息，generation 可直接取自 hook，减少对 rollout 的依赖。待采样确认。

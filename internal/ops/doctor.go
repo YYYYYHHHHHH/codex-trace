@@ -229,7 +229,7 @@ func checkConnectivity(ctx context.Context, e Env) check {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	res := exporter.New(cfg.Host, cfg.PublicKey, cfg.SecretKey, e.HTTP).Send(ctx, []byte(`{"resourceSpans":[]}`))
+	res := exporter.New(cfg.Host, cfg.PublicKey, cfg.SecretKey, e.HTTP).WithUserAgent("codex-trace/"+e.Version).Send(ctx, []byte(`{"resourceSpans":[]}`))
 	proxy := proxyHint(e)
 	switch {
 	case res.Outcome == exporter.OK:

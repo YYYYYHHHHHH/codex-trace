@@ -14,8 +14,8 @@ import (
 )
 
 type captured struct {
-	path, auth, contentType, encoding string
-	body                              string
+	path, auth, contentType, encoding, userAgent string
+	body                                         string
 }
 
 func server(t *testing.T, status int, respBody string, header map[string]string) (*httptest.Server, *captured) {
@@ -26,6 +26,7 @@ func server(t *testing.T, status int, respBody string, header map[string]string)
 		got.auth = r.Header.Get("Authorization")
 		got.contentType = r.Header.Get("Content-Type")
 		got.encoding = r.Header.Get("Content-Encoding")
+		got.userAgent = r.Header.Get("User-Agent")
 		zr, err := gzip.NewReader(r.Body)
 		if err == nil {
 			b, _ := io.ReadAll(zr)
@@ -197,5 +198,18 @@ func TestServerMessageIsSanitized(t *testing.T) {
 	got := sanitize(msg)
 	if strings.ContainsRune(got, 0x1b) || len([]rune(got)) > maxMessageRunes+1 || !strings.HasSuffix(got, "…") {
 		t.Errorf("sanitize = %q", got)
+	}
+}
+
+func TestSendSetsUserAgent(t *testing.T) {
+	srv, got := server(t, 200, `{}`, nil)
+	base := New(srv.URL, "pk", "sk", srv.Client())
+	base.Send(context.Background(), []byte(`{}`))
+	if got.userAgent != DefaultUserAgent {
+		t.Errorf("default UA = %q", got.userAgent)
+	}
+	base.WithUserAgent("codex-trace/1.2.3").Send(context.Background(), []byte(`{}`))
+	if got.userAgent != "codex-trace/1.2.3" {
+		t.Errorf("custom UA = %q", got.userAgent)
 	}
 }

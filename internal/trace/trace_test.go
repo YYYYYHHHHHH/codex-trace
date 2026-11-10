@@ -125,3 +125,20 @@ func TestHashID(t *testing.T) {
 		t.Error("hash must be namespaced and 16 hex chars")
 	}
 }
+
+func TestSharedAttrsOnEverySpan(t *testing.T) {
+	turn := session.Turn{ID: "t", Start: t0, Tools: []session.Tool{{ID: "c", Name: "Bash", Done: true}}}
+	facts := rollout.TurnFacts{Generations: []rollout.Generation{{ResponseID: "r", Start: t0, End: t0}}}
+
+	spans := BuildTurn(turn, facts, Context{SessionID: "s1", UserID: "u1", TraceKey: "t"}, Policy{Environment: "dev", Release: "1.0"})
+
+	for _, s := range spans {
+		got := map[string]string{}
+		for _, a := range s.Attrs {
+			got[a.Key] = a.Value.AsString()
+		}
+		if got[attrSessionID] != "s1" || got[attrUserID] != "u1" || got[attrEnvironment] != "dev" || got[attrRelease] != "1.0" {
+			t.Errorf("span %q missing shared attrs: %v", s.Name, got)
+		}
+	}
+}

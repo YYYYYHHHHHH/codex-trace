@@ -75,7 +75,21 @@ func BuildTurn(t session.Turn, f rollout.TurnFacts, c Context, p Policy) []otlp.
 	for _, g := range f.Generations {
 		spans = append(spans, buildGenerationSpan(g, model, f.Effort, turnSpan))
 	}
+	// Langfuse v4 按 observation 存储 environment / session / user，不会从父 span 继承，
+	// 子 span 需要各自携带，否则按 environment 或会话筛选时会漏掉工具与模型调用。
+	shared := sharedAttrs(c, p)
+	for i := 1; i < len(spans); i++ {
+		spans[i].Attrs = append(spans[i].Attrs, shared...)
+	}
 	return spans
+}
+
+// sharedAttrs 是一个轮次内所有 span 共有的归属属性。
+func sharedAttrs(c Context, p Policy) []otlp.Attr {
+	attrs := []otlp.Attr{otlp.String(attrSessionID, c.SessionID)}
+	attrs = appendNonEmpty(attrs, attrUserID, c.UserID)
+	attrs = appendNonEmpty(attrs, attrEnvironment, p.Environment)
+	return appendNonEmpty(attrs, attrRelease, p.Release)
 }
 
 func buildTurnSpan(t session.Turn, f rollout.TurnFacts, c Context, p Policy) otlp.Span {
@@ -92,13 +106,7 @@ func buildTurnSpan(t session.Turn, f rollout.TurnFacts, c Context, p Policy) otl
 	}
 	model := firstNonEmpty(f.Model, t.Model)
 
-	attrs := []otlp.Attr{
-		otlp.String(attrObsType, obsAgent),
-		otlp.String(attrSessionID, c.SessionID),
-	}
-	attrs = appendNonEmpty(attrs, attrUserID, c.UserID)
-	attrs = appendNonEmpty(attrs, attrEnvironment, p.Environment)
-	attrs = appendNonEmpty(attrs, attrRelease, p.Release)
+	attrs := append([]otlp.Attr{otlp.String(attrObsType, obsAgent)}, sharedAttrs(c, p)...)
 
 	tags := []string{"codex"}
 	if t.IsSubagent() {

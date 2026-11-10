@@ -51,9 +51,21 @@ type Result struct {
 
 // Sender 发送 OTLP 请求；零值不可用，请使用 New。
 type Sender struct {
-	endpoint string
-	auth     string
-	client   *http.Client
+	endpoint  string
+	auth      string
+	userAgent string
+	client    *http.Client
+}
+
+// DefaultUserAgent 是未调用 WithUserAgent 时使用的 User-Agent。
+// 显式设置可避免被 Cloudflare 等前置防护按默认 UA 拦截，也便于服务端识别来源。
+const DefaultUserAgent = "codex-trace"
+
+// WithUserAgent 返回使用指定 User-Agent 的 Sender 副本。
+func (s *Sender) WithUserAgent(ua string) *Sender {
+	c := *s
+	c.userAgent = ua
+	return &c
 }
 
 // New 创建 Sender。client 为 nil 时使用带超时的默认 client（遵循 HTTPS_PROXY 等环境变量）。
@@ -66,9 +78,10 @@ func New(host, publicKey, secretKey string, client *http.Client) *Sender {
 	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	token := base64.StdEncoding.EncodeToString([]byte(publicKey + ":" + secretKey))
 	return &Sender{
-		endpoint: strings.TrimRight(host, "/") + TracesPath,
-		auth:     "Basic " + token,
-		client:   &c,
+		endpoint:  strings.TrimRight(host, "/") + TracesPath,
+		auth:      "Basic " + token,
+		userAgent: DefaultUserAgent,
+		client:    &c,
 	}
 }
 
@@ -90,6 +103,7 @@ func (s *Sender) Send(ctx context.Context, body []byte) Result {
 	req.Header.Set("Authorization", s.auth)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
+	req.Header.Set("User-Agent", s.userAgent)
 
 	resp, err := s.client.Do(req)
 	if err != nil {

@@ -4,8 +4,9 @@
 
 ## 当前状态（2026-11-09）
 
-- ✅ 采集、关联、上传、运维命令、插件打包全部完成；本机 E2E（本地假 OTLP 接收器 + 真实 Codex 会话）通过。
-- ⏳ 待 Langfuse 信息：M1 真实 Langfuse 冒烟（验证属性映射与 span 去重）与真实环境 E2E。见 [docs/PLAN.md](docs/PLAN.md)。
+- ✅ 采集、关联、上传、运维命令、插件打包全部完成。
+- ✅ 真实 Langfuse 验收通过（2026-11-10）：`make smoke`（fixture 回放 + 去重）与 `make e2e-langfuse`（真实 Codex 会话上报并读回校验）。见 [docs/otel-mapping.md](docs/otel-mapping.md)。
+- ⏳ 客户试点、发布到私有 git marketplace。见 [docs/PLAN.md](docs/PLAN.md)。
 
 ## 文档
 
@@ -16,6 +17,7 @@
 | [docs/operations.md](docs/operations.md) | 维护人员：构建发布、凭证轮换、排障 |
 | [docs/managed-deployment.md](docs/managed-deployment.md) | 企业 IT：托管下发 hook（免审批，草案） |
 | [docs/PLAN.md](docs/PLAN.md) | 交付计划与进度 |
+| [docs/otel-mapping.md](docs/otel-mapping.md) | OTel → Langfuse 映射与去重的实测结论 |
 | [docs/payload-notes.md](docs/payload-notes.md) | Codex hook payload / rollout 实测记录 |
 | [docs/HANDOFF.md](docs/HANDOFF.md) | 项目背景与原始决策 |
 
@@ -34,6 +36,7 @@ internal/
 plugins/codex-trace/     Codex 插件（plugin.json、hooks.json、平台选择启动脚本、skill）
 .agents/plugins/         marketplace 清单（仓库本身即 marketplace）
 tools/fakeotlp/          E2E 用本地 OTLP 接收器与调用树校验
+tools/lfsmoke/           真实 Langfuse 冒烟与读回校验
 scripts/                 build-dist.sh（发布构建）、e2e.sh、payload 采集工具
 testdata/                脱敏的真实 hook payload 与 rollout 样本
 ```
@@ -45,5 +48,7 @@ make test     # go test -race
 make vet      # gofmt + go vet
 make cover    # 覆盖率
 make dist     # 四平台发布构建（凭证来自 ~/.config/codex-trace/build.env）
-make e2e      # 本机端到端测试
+make e2e      # 本机端到端测试（本地假接收器）
+make e2e-langfuse  # 本机端到端测试（真实 Langfuse，凭证取自 build.env）
+make smoke    # 真实 Langfuse 冒烟（fixture 回放 + 去重检查）
 ```

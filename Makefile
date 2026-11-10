@@ -1,4 +1,4 @@
-.PHONY: build test cover vet dist e2e clean
+.PHONY: build test cover vet dist e2e e2e-langfuse smoke clean
 
 # 本地开发用：不含内置凭证
 build:
@@ -22,6 +22,14 @@ dist:
 # 本机端到端测试：本地假 OTLP 接收器 + 真实 Codex 会话
 e2e:
 	./scripts/e2e.sh
+
+# 本机端到端测试：上报到 build.env 中的真实 Langfuse（environment=codex-trace-e2e）并读回校验
+e2e-langfuse:
+	E2E_TARGET=langfuse ./scripts/e2e.sh
+
+# 真实 Langfuse 冒烟：发送 fixture 会话、读回比对、重复发送检查去重
+smoke:
+	go run ./tools/lfsmoke fixture -resend
 
 clean:
 	rm -rf bin coverage.out plugins/codex-trace/bin/darwin-* plugins/codex-trace/bin/linux-*
