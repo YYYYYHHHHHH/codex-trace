@@ -1,0 +1,25 @@
+#!/bin/sh
+# 按平台选择 trace-hook 二进制。找不到可用二进制时：hook 调用静默退出（不影响 Codex），其他命令报错。
+# 只 fork 一次 uname：hook 每次工具调用都会执行，启动开销要尽量小。
+dir=${0%/*}
+read -r os arch <<UNAME
+$(uname -sm)
+UNAME
+case "$os" in
+  Darwin) os=darwin ;;
+  Linux) os=linux ;;
+esac
+case "$arch" in
+  x86_64 | amd64) arch=amd64 ;;
+  arm64 | aarch64) arch=arm64 ;;
+esac
+bin="$dir/$os-$arch/trace-hook"
+if [ -x "$bin" ]; then
+  exec "$bin" "$@"
+fi
+if [ "${1-}" = "hook" ]; then
+  cat >/dev/null 2>&1
+  exit 0
+fi
+echo "codex-trace: 没有适用于 $os-$arch 的 trace-hook" >&2
+exit 1
