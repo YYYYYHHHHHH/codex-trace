@@ -49,14 +49,14 @@ rollout 每条记录都有 `ordinal`，可作为增量读取游标。
 |---|---|---|
 | 工具退出码 / 失败 | `event_msg/item_completed`，`item.type=CommandExecution` 的 `status`（`completed` / `failed`）、`exit_code`、`duration` | `item.id` = `tool_use_id` |
 | 文件改动 | `item.type=FileChange` 的 `changes`、`status` | `item.id` = `tool_use_id` |
-| 子 agent ↔ spawn 调用 | `item.type=CollabAgentToolCall` 的 `receiver_thread_ids` | `item.id` = spawn 的 `tool_use_id`，`receiver_thread_ids[]` = `agent_id` |
+| 子 agent ↔ spawn 调用 | 父 rollout 中 `item.type=SubAgentActivity`（`kind=started`）；或 spawn 的 `tool_response.task_name` = 子 rollout `session_meta.source.subagent.thread_spawn.agent_path` | `item.id` = spawn 的 `tool_use_id`，`agent_thread_id` = `agent_id`。实现采用 task_name ↔ agent_path（只依赖 hook 与子 rollout） |
 | 模型调用（generation） | `token_usage_record`：`response_id`（唯一）、`usage.{input,cached_input,cache_write_input,output,reasoning_output}_tokens` | `turn_id` |
 | 模型名 / 推理强度 | `turn_context.model`、`effort` | `turn_id` |
 | 轮次耗时 | `event_msg/task_complete`：`duration_ms`、`time_to_first_token_ms` | `turn_id` |
 | 子 agent 的父轮次 | 子 rollout 中 `task_started.turn_attribution`：`parent_turn_id`、`root_turn_id` | 子 `turn_id` |
 | 打断 | `event_msg/turn_aborted` | `turn_id` |
 
-**坑：子 agent 的 rollout 开头复制了父会话的历史**（含父会话的 `session_meta`、`task_started` 等），读取时只能保留 `turn_id` 属于子 agent 的记录，否则 token 会重复计算。
+**坑：子 agent 的 rollout 开头复制了父会话的历史**（含父会话的 `session_meta`、`task_started`，**甚至父轮次的 `turn_aborted`**），读取时只能保留 `turn_id` 属于子 agent 的记录，否则 token 会重复计算、父轮次会被误判为打断。
 
 敏感字段：`session_meta.creator_user_id`、`creator_account_id` 上传前需哈希；`base_instructions`、`message`、`reasoning` 默认不上传。
 
@@ -67,7 +67,7 @@ rollout 每条记录都有 `ordinal`，可作为增量读取游标。
 | Session | `session_id` | 子 agent 自然归入同一 session |
 | Trace | `root_turn_id` | 主会话事件即 `turn_id`；子 agent 事件通过子 rollout 的 `turn_attribution.root_turn_id` 解析 |
 | 工具 span | `tool_use_id` | Pre 创建、Post 更新；退出码从 rollout 补 |
-| 子 agent span | 子 agent 的 `turn_id` | `parentObservationId` = spawn 调用的 `tool_use_id`（经 `CollabAgentToolCall` 关联） |
+| 子 agent span | 子 agent 的 `turn_id` | 父 span = spawn 调用的工具 span（经 task_name ↔ agent_path 关联） |
 | 子 agent 内工具 span | `tool_use_id` | `parentObservationId` = 子 agent span |
 | Generation | `response_id` | 挂在所属 turn 对应的 trace / 子 agent span 下 |
 | Ingestion event id | `hash(observation_id + 事件类型)` | 重试幂等 |
