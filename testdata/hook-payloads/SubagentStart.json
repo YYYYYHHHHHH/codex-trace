@@ -1,0 +1,11 @@
+{
+  "session_id": "01a1c37b-4c83-7592-9323-47ac471857d5",
+  "turn_id": "01a1c37b-ae35-7bc1-ad0d-91545c66b71c",
+  "transcript_path": "/Users/alice/.codex/sessions/2026/11/09/rollout-2026-11-09T19-23-45-01a1c37b-ae27-70b2-8449-dc997b56528e.jsonl",
+  "cwd": "/private/tmp/codex-trace-run",
+  "hook_event_name": "SubagentStart",
+  "model": "gpt-6.1-sol",
+  "permission_mode": "bypassPermissions",
+  "agent_id": "01a1c37b-ae27-70b2-8449-dc997b56528e",
+  "agent_type": "default"
+}

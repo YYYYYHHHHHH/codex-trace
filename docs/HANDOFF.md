@@ -1,7 +1,7 @@
 # 工作移交：Codex 调用链远程采集（hook → Langfuse）
 
 > 移交日期：2026-11-09
-> 状态：方案已确定，尚未开始编码。下一步是抓取真实 hook payload。
+> 状态：方案已确定；真实 hook payload 已采集（见 [payload-notes.md](payload-notes.md)），下一步搭插件骨架。
 
 ## 1. 目标
 
@@ -67,13 +67,15 @@ codex-trace/
 | `SubagentStart` / `SubagentStop` | `span-create` / `span-update`；子 agent 内的工具 span 用 `parentObservationId` 指向它 |
 | `Stop` | `trace-update` 补 `output`；读取 rollout 增量，补 `generation-create`（模型、token、耗时） |
 
-### 确定性 ID（hook 进程间无需共享状态）
+### 确定性 ID
+
+> **已被实测结论取代**：最终 ID 方案、rollout 关联方式见 [payload-notes.md 第 5 节](payload-notes.md#5-id-方案取代-handoff-第-5-节的草案)。以下为原草案，仅供对照。
 
 - trace id：`hash(session_id + turn_id)`；payload 无 turn id 时在本地维护轮次计数
 - span id：工具调用自带的 call id（如 `tool_use_id` / `call_id`）
 - event id：`hash(span_id + 事件类型)` —— Langfuse 按 event id 去重，重试安全
 
-> 具体字段名待第 8 节第 1 步抓到真实 payload 后确认。
+> 实测：payload 自带 `turn_id`、`tool_use_id`，无需本地轮次计数；退出码、token 需从 rollout 补。
 
 ### 请求示例
 
@@ -130,16 +132,20 @@ capture_content = false   # 默认不上传 prompt / 工具输出原文
 
 ## 8. 下一步
 
-1. **抓真实 payload**：在本机 `~/.codex/hooks.json` 临时**追加**一个只把 stdin 落盘的 hook（不要改动现有的 codeisland、orca hooks），跑一轮 Codex 后删除。确认 session id、turn id、call id、rollout 文件路径的字段名。
-2. 根据 payload 敲定 ID 方案和 spool 记录格式。
+1. ✅ **抓真实 payload**（2026-11-09 完成，结论见 [payload-notes.md](payload-notes.md)，样本见 `testdata/hook-payloads/`；`PermissionRequest` 待桌面端补采）：在本机 `~/.codex/hooks.json` 临时**追加**一个只把 stdin 落盘的 hook（不要改动现有的 codeisland、orca hooks），跑一轮 Codex 后删除。确认 session id、turn id、call id、rollout 文件路径的字段名。
+2. ✅ ID 方案已定（payload-notes 第 5 节）。spool 记录 = 原始 payload + 接收时间；关联逻辑放在上传进程。
 3. 搭插件骨架：`plugin.json` + `hooks.json` + Go 版 `trace-hook`（spool + 上传）。
 4. 用本地 marketplace（参考本机 `infinite-canvas-local`）在自己机器上跑通，在 Langfuse 中验证调用树。
 5. 小范围客户试点，观察性能与数据质量；再推 git marketplace 并写三步接入文档。
 
+## 8.1 新发现：hook 信任机制（影响分发）
+
+Codex 对未信任的 hook **静默跳过**，插件 hook 也要用户审批，managed 配置下发的 hook 自动受信。详见 [payload-notes.md 第 6 节](payload-notes.md#6-hook-信任机制影响分发)。第 5 步的接入文档和 `doctor` 命令必须覆盖"已安装但未信任"的情况；企业客户优先走 MDM 下发 managed 配置。
+
 ## 9. 参考：本机现状（2026-11-09 检查）
 
 - Codex 数据目录：`~/.codex/`；会话记录：`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`
-- PATH 中没有 `codex` 命令（使用的是桌面端 / IDE 入口）
+- PATH 中没有 `codex` 命令（使用的是桌面端 / IDE 入口）；可用的 CLI 在 `~/.codex/plugins/.plugin-appserver/codex-cli/bin/codex`（0.167.0-alpha.3.2）
 - `~/.codex/config.toml` 未配置 `[otel]`
 - `~/.codex/hooks.json` 已有 codeisland-bridge 与 orca 两套 hooks —— 任何安装脚本都必须**合并**而非覆盖
 - 插件自带 hooks 的参考实现：`~/.codex/plugins/cache/composio/composio/0.2.3/hooks/hooks.json`

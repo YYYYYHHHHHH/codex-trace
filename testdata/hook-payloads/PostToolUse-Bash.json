@@ -1,0 +1,15 @@
+{
+  "session_id": "01a1c37b-4c83-7592-9323-47ac471857d5",
+  "turn_id": "01a1c37b-500d-70c1-8ad5-32d7a4232992",
+  "transcript_path": "/Users/alice/.codex/sessions/2026/11/09/rollout-2026-11-09T19-23-20-01a1c37b-4c83-7592-9323-47ac471857d5.jsonl",
+  "cwd": "/private/tmp/codex-trace-run",
+  "hook_event_name": "PostToolUse",
+  "model": "gpt-6.1-sol",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "ls -la"
+  },
+  "tool_response": "total 0\ndrwxr-xr-x@   2 alice   wheel    64 Nov  9 19:23 .\ndrwxrwxrwt  143 root  wheel  4576 Nov  9 19:23 ..\n",
+  "tool_use_id": "exec-77befa19-62c8-4f98-bc7f-6e6850ee7808"
+}

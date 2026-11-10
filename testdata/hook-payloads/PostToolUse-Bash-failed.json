@@ -1,0 +1,15 @@
+{
+  "session_id": "01a1c37b-4c83-7592-9323-47ac471857d5",
+  "turn_id": "01a1c37b-500d-70c1-8ad5-32d7a4232992",
+  "transcript_path": "/Users/alice/.codex/sessions/2026/11/09/rollout-2026-11-09T19-23-20-01a1c37b-4c83-7592-9323-47ac471857d5.jsonl",
+  "cwd": "/private/tmp/codex-trace-run",
+  "hook_event_name": "PostToolUse",
+  "model": "gpt-6.1-sol",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "cat /nonexistent-file"
+  },
+  "tool_response": "cat: /nonexistent-file: No such file or directory\n",
+  "tool_use_id": "exec-5d47b0d0-c287-4c3c-8458-81d4979df5a7"
+}

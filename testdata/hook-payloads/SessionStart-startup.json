@@ -1,0 +1,9 @@
+{
+  "session_id": "01a1c37b-4c83-7592-9323-47ac471857d5",
+  "transcript_path": "/Users/alice/.codex/sessions/2026/11/09/rollout-2026-11-09T19-23-20-01a1c37b-4c83-7592-9323-47ac471857d5.jsonl",
+  "cwd": "/private/tmp/codex-trace-run",
+  "hook_event_name": "SessionStart",
+  "model": "gpt-6.1-sol",
+  "permission_mode": "bypassPermissions",
+  "source": "startup"
+}

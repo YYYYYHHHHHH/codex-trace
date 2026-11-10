@@ -1,0 +1,9 @@
+{
+  "session_id": "01a1c37c-d190-7e41-b9f1-b6f8eadbb7ad",
+  "turn_id": "01a1c37c-d4a4-7b41-8e52-bd67ab005464",
+  "transcript_path": "/Users/alice/.codex/sessions/2026/11/09/rollout-2026-11-09T19-25-00-01a1c37c-d190-7e41-b9f1-b6f8eadbb7ad.jsonl",
+  "cwd": "/private/tmp/codex-trace-run",
+  "hook_event_name": "Interrupt",
+  "model": "gpt-6.1-sol",
+  "permission_mode": "bypassPermissions"
+}

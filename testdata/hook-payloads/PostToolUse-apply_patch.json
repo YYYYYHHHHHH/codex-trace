@@ -1,0 +1,15 @@
+{
+  "session_id": "01a1c37b-4c83-7592-9323-47ac471857d5",
+  "turn_id": "01a1c37b-500d-70c1-8ad5-32d7a4232992",
+  "transcript_path": "/Users/alice/.codex/sessions/2026/11/09/rollout-2026-11-09T19-23-20-01a1c37b-4c83-7592-9323-47ac471857d5.jsonl",
+  "cwd": "/private/tmp/codex-trace-run",
+  "hook_event_name": "PostToolUse",
+  "model": "gpt-6.1-sol",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "apply_patch",
+  "tool_input": {
+    "command": "*** Begin Patch\n*** Add File: /private/tmp/codex-trace-run/test.txt\n+hello\n*** End Patch"
+  },
+  "tool_response": "Exit code: 0\nWall time: 0 seconds\nOutput:\nSuccess. Updated the following files:\nA /private/tmp/codex-trace-run/test.txt\n",
+  "tool_use_id": "exec-87d73dc1-db9d-4a21-b6e1-2819a97fe44e"
+}
