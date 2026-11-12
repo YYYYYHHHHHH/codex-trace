@@ -3,6 +3,7 @@ package trace
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/YYYYYHHHHHH/codex-trace/internal/otlp"
 	"github.com/YYYYYHHHHHH/codex-trace/internal/rollout"
@@ -146,4 +147,40 @@ func jsonSize(v any) int {
 		return 0
 	}
 	return len(data)
+}
+
+// addInventoryMeta 把上下文中的工具与 skill 清单写入元数据（逗号分隔，便于在 Langfuse 中按"包含"筛选）。
+// withFiles 时附带每个 skill 的 SKILL.md 路径（~/ 形式，不含用户名），只放在轮次 observation 上。
+func addInventoryMeta(meta map[string]any, inv rollout.Inventory, withFiles bool) {
+	if inv.Empty() {
+		return
+	}
+	names := make([]string, len(inv.Skills))
+	files := make([]string, len(inv.Skills))
+	for i, s := range inv.Skills {
+		names[i] = s.Name
+		files[i] = s.Name + ": " + rollout.HomeRelative(s.File)
+	}
+	meta["context_tools"] = strings.Join(inv.Tools, ", ")
+	meta["context_tool_count"] = len(inv.Tools)
+	meta["context_mcp_servers"] = strings.Join(inv.MCPServers, ", ")
+	meta["context_skills"] = strings.Join(names, ", ")
+	meta["context_skill_count"] = len(inv.Skills)
+	meta["skills_used"] = strings.Join(inv.SkillsUsed, ", ")
+	if withFiles {
+		meta["context_skill_files"] = strings.Join(files, "\n")
+	}
+}
+
+// inventoryTags 把本轮读取过的 skill 与上下文中的 MCP 服务做成 trace 标签。
+// Langfuse 列表与筛选读取的元数据值会被截断到 200 字符，标签不会，按标签筛选更可靠。
+func inventoryTags(inv rollout.Inventory) []string {
+	tags := make([]string, 0, len(inv.SkillsUsed)+len(inv.MCPServers))
+	for _, s := range inv.SkillsUsed {
+		tags = append(tags, "skill:"+s)
+	}
+	for _, m := range inv.MCPServers {
+		tags = append(tags, "mcp:"+m)
+	}
+	return tags
 }

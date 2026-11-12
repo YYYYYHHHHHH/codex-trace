@@ -202,3 +202,75 @@ func TestGenerationWithoutContentHasNoInput(t *testing.T) {
 		t.Error("generation without rollout content should not carry input")
 	}
 }
+
+func inventoryContent() rollout.TurnContent {
+	tc := genContent()
+	tc.Inventory = rollout.Inventory{
+		Tools:      []string{"functions.exec", "mcp__cua_repl.js"},
+		MCPServers: []string{"cua_repl"},
+		Skills: []rollout.Skill{
+			{Name: "imagegen", File: "/Users/alice/.codex/skills/imagegen/SKILL.md"},
+			{Name: "composio:composio", File: "/home/alice/.codex/plugins/cache/composio/SKILL.md"},
+		},
+		SkillsUsed: []string{"composio:composio"},
+	}
+	return tc
+}
+
+// turnAttrs 返回轮次 span 上以 prefix 开头的属性（去掉前缀）。
+func turnAttrs(spans []otlp.Span, prefix string) map[string]otlp.Value {
+	out := map[string]otlp.Value{}
+	for _, a := range spans[0].Attrs {
+		if k, ok := strings.CutPrefix(a.Key, prefix); ok {
+			out[k] = a.Value
+		}
+	}
+	return out
+}
+
+func TestTurnMetadataListsContextInventory(t *testing.T) {
+	spans := buildGen(t, inventoryContent(), true)
+
+	obs := turnAttrs(spans, attrObsMetaPref)
+	want := map[string]string{
+		"context_tools":       "functions.exec, mcp__cua_repl.js",
+		"context_mcp_servers": "cua_repl",
+		"context_skills":      "imagegen, composio:composio",
+		"skills_used":         "composio:composio",
+		"context_skill_files": "imagegen: ~/.codex/skills/imagegen/SKILL.md\ncomposio:composio: ~/.codex/plugins/cache/composio/SKILL.md",
+	}
+	for k, v := range want {
+		if got := obs[k].AsString(); got != v {
+			t.Errorf("observation metadata %s = %q, want %q", k, got, v)
+		}
+	}
+	if obs["context_tool_count"].AsInt() != 2 || obs["context_skill_count"].AsInt() != 2 {
+		t.Errorf("counts = %d / %d", obs["context_tool_count"].AsInt(), obs["context_skill_count"].AsInt())
+	}
+
+	tr := turnAttrs(spans, attrTraceMetaPref)
+	if tr["context_skills"].AsString() != want["context_skills"] || tr["skills_used"].AsString() != "composio:composio" {
+		t.Errorf("trace metadata should carry skill names for filtering: %v", tr)
+	}
+	tags := strings.Join(find(spans, attrTraceTags)["codex turn"].AsStrings(), ",")
+	if !strings.Contains(tags, "skill:composio:composio") || !strings.Contains(tags, "mcp:cua_repl") || strings.Contains(tags, "skill:imagegen") {
+		t.Errorf("tags should carry used skills and MCP servers only: %s", tags)
+	}
+	if _, ok := tr["context_skill_files"]; ok {
+		t.Error("file paths belong to the observation only")
+	}
+	for k, v := range obs {
+		if strings.Contains(v.AsString(), "alice") {
+			t.Errorf("%s leaks the user name: %q", k, v.AsString())
+		}
+	}
+}
+
+func TestContextInventoryRequiresCapture(t *testing.T) {
+	spans := buildGen(t, inventoryContent(), false)
+	for k := range turnAttrs(spans, attrObsMetaPref) {
+		if strings.HasPrefix(k, "context_") || k == "skills_used" {
+			t.Errorf("%s exported although capture_content=false", k)
+		}
+	}
+}

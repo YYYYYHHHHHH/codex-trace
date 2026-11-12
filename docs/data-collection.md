@@ -64,6 +64,13 @@ v0.2.0 起默认开启。额外上报：
   - 产出：模型的回复文字与它发起的工具调用；
   - 输入：相对上一次调用新增的部分（用户 prompt、developer 指令、上一个工具的结果）；
   - 每轮**最后一次**模型调用额外带完整输入：系统提示词、工具定义（含 MCP 工具）、该轮之前的全部会话历史（含 AGENTS.md 与可用 skill 列表等 developer 指令）。
+- 每轮的上下文清单（写入轮次元数据，便于排查和筛选）：
+  - `context_tools` / `context_tool_count`：模型可用的工具（`命名空间.工具名`，含 MCP 工具）；
+  - `context_mcp_servers`：上下文中的 MCP 服务；
+  - `context_skills` / `context_skill_count`：可用 skill 名称；`context_skill_files`：每个 skill 的 SKILL.md 路径（用户目录改写为 `~/`，不含用户名，只在轮次 observation 上）；
+  - `skills_used`：本轮工具调用中读取过其 SKILL.md 的 skill。
+  名称类字段同时写入 trace 元数据。Langfuse 列表与筛选只读取元数据值的前 200 字符（详情页为完整值），
+  因此本轮读取过的 skill 与上下文中的 MCP 服务另外写成 trace 标签 `skill:<名称>`、`mcp:<服务>`，按标签筛选不受截断影响。
 
 上报前会：
 

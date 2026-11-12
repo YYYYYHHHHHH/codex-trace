@@ -45,6 +45,8 @@ type TurnContent struct {
 	System         string
 	Tools          []json.RawMessage
 	FullInput      []Message
+	// Inventory 是最后一次调用时上下文中的工具与 skill 清单，以及本轮读取过的 skill。
+	Inventory Inventory
 }
 
 // entry 是会话历史中的一项：一条消息，或一组工具定义（additional_tools）。
@@ -59,11 +61,13 @@ type turnState struct {
 	pendOut  []Message
 	firstOut int // 本次调用第一条产出在 history 中的下标，-1 表示还没有产出
 	lastCut  []entry
+	skills   string // 最后一次调用时生效的 skill 段
 }
 
 type contentBuilder struct {
 	want    map[string]bool
 	system  string
+	skills  string // 最近出现的 skill 段（developer 消息），压缩后以替换历史中的为准
 	history []entry
 	turns   map[string]*turnState
 }
@@ -137,6 +141,7 @@ func (b *contentBuilder) addCompacted(raw json.RawMessage) {
 	for _, item := range p.ReplacementHistory {
 		if e, ok := toEntry(item); ok {
 			history = append(history, e)
+			b.noteSkills(e)
 		}
 	}
 	b.history = history
@@ -151,6 +156,7 @@ func (b *contentBuilder) addItem(raw json.RawMessage) {
 		return
 	}
 	b.history = append(b.history, e)
+	b.noteSkills(e)
 	if e.msg == nil {
 		return // 工具定义只进入完整输入，不算作某次调用的新增输入
 	}
@@ -188,7 +194,14 @@ func (b *contentBuilder) addUsage(raw json.RawMessage) {
 	// 只追加、压缩时整体替换，因此截取的前缀之后不会被改写
 	st.lastCut = b.history[:cut:cut]
 	st.content.LastResponseID = p.ResponseID
+	st.skills = b.skills
 	st.pendIn, st.pendOut, st.firstOut = nil, nil, -1
+}
+
+func (b *contentBuilder) noteSkills(e entry) {
+	if e.msg != nil && strings.Contains(e.msg.Content, skillsTag) {
+		b.skills = e.msg.Content
+	}
 }
 
 func (b *contentBuilder) turn(id string) *turnState {
@@ -213,6 +226,7 @@ func (b *contentBuilder) result() map[string]TurnContent {
 					tc.Tools = append(tc.Tools, e.tools...)
 				}
 			}
+			tc.Inventory = buildInventory(tc.Tools, st.skills, tc.Generations)
 		}
 		out[id] = tc
 	}

@@ -131,11 +131,18 @@ func buildTurnSpan(t session.Turn, f rollout.TurnFacts, c Context, p Policy) otl
 	}
 
 	if !t.IsSubagent() {
+		if p.CaptureContent {
+			tags = append(tags, inventoryTags(c.Content.Inventory)...)
+		}
 		attrs = append(attrs, otlp.String(attrTraceName, name), otlp.Strings(attrTraceTags, tags))
-		attrs = append(attrs, metaAttrs(attrTraceMetaPref, map[string]any{
+		traceMeta := map[string]any{
 			"model":         model,
 			"codex_version": c.CodexVersion,
-		})...)
+		}
+		if p.CaptureContent {
+			addInventoryMeta(traceMeta, c.Content.Inventory, false)
+		}
+		attrs = append(attrs, metaAttrs(attrTraceMetaPref, traceMeta)...)
 	}
 	attrs = append(attrs, metaAttrs(attrObsMetaPref, turnMeta(t, f, c, p, model))...)
 
@@ -184,6 +191,8 @@ func turnMeta(t session.Turn, f rollout.TurnFacts, c Context, p Policy, model st
 	if !p.CaptureContent {
 		meta["prompt_bytes"] = t.PromptBytes
 		meta["output_bytes"] = t.OutputBytes
+	} else {
+		addInventoryMeta(meta, c.Content.Inventory, true)
 	}
 	return meta
 }
