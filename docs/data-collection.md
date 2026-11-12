@@ -60,13 +60,24 @@ v0.2.0 起默认开启。额外上报：
 
 - 每轮的 prompt 与最终回复
 - 每次工具调用的输入与输出
+- 每次模型调用的内容（从本机 rollout 重建）：
+  - 产出：模型的回复文字与它发起的工具调用；
+  - 输入：相对上一次调用新增的部分（用户 prompt、developer 指令、上一个工具的结果）；
+  - 每轮**最后一次**模型调用额外带完整输入：系统提示词、工具定义（含 MCP 工具）、该轮之前的全部会话历史（含 AGENTS.md 与可用 skill 列表等 developer 指令）。
+- 每轮的上下文清单（写入轮次元数据，便于排查和筛选）：
+  - `context_tools` / `context_tool_count`：模型可用的工具（`命名空间.工具名`，含 MCP 工具）；
+  - `context_mcp_servers`：上下文中的 MCP 服务；
+  - `context_skills` / `context_skill_count`：可用 skill 名称；`context_skill_files`：每个 skill 的 SKILL.md 路径（用户目录改写为 `~/`，不含用户名，只在轮次 observation 上）；
+  - `skills_used`：本轮工具调用中读取过其 SKILL.md 的 skill。
+  名称类字段同时写入 trace 元数据。Langfuse 列表与筛选只读取元数据值的前 200 字符（详情页为完整值），
+  因此本轮读取过的 skill 与上下文中的 MCP 服务另外写成 trace 标签 `skill:<名称>`、`mcp:<服务>`，按标签筛选不受截断影响。
 
 上报前会：
 
 1. 按规则遮蔽常见密钥形态（API key、令牌、私钥、Authorization / Cookie 头、URL 中的账号密码、`password=` 等字段），见 `internal/redact`；
-2. 每个字段截断到 10KB。
+2. 截断：prompt、回复、工具输入输出每个字段 10KB；模型调用中单条消息 64KB，新增输入 / 产出每个字段 256KB，完整输入 1MB（超出时从最早的消息开始省略并注明条数），工具定义超过 256KB 时只保留名称。
 
-**模型的系统提示词、推理过程（reasoning）在任何模式下都不会上传。**
+**模型的推理过程（reasoning）在任何模式下都不会上传**（rollout 中为加密内容）。系统提示词只在开启内容采集时随完整输入上传。
 
 关闭内容采集（只上报第 2 节的元数据），任选其一：
 

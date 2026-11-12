@@ -34,13 +34,15 @@ const (
 	DefaultRunFor    = 2 * time.Minute // Once 模式的上限
 	SpoolBatch       = 500
 	MaxSpansPerBatch = 100
-	OutboxMaxBytes   = 16 << 20
-	FailedMaxBytes   = 4 << 20
-	minBackoff       = time.Second
-	maxBackoff       = 5 * time.Minute
-	sendTimeout      = 30 * time.Second
-	lockPoll         = 50 * time.Millisecond
-	scopeName        = "codex-trace"
+	// MaxBatchBytes 是单批编码后（压缩前）的上限，远低于上报网关解压后 32MB 的限制。
+	MaxBatchBytes  = 4 << 20
+	OutboxMaxBytes = 16 << 20
+	FailedMaxBytes = 4 << 20
+	minBackoff     = time.Second
+	maxBackoff     = 5 * time.Minute
+	sendTimeout    = 30 * time.Second
+	lockPoll       = 50 * time.Millisecond
+	scopeName      = "codex-trace"
 )
 
 // Sender 发送一个 OTLP 请求体。
@@ -275,13 +277,15 @@ func (r *runner) dropped(name string, err error) {
 
 // enqueue 把 span 分批写入 outbox，返回已写入的条目名（失败时供回滚）。
 func (r *runner) enqueue(spans []otlp.Span) ([]string, error) {
+	encode := func(s []otlp.Span) ([]byte, error) {
+		return otlp.Encode(r.d.Resource, scopeName, r.d.Version, s)
+	}
+	bodies, err := encodeBatches(spans, encode, MaxSpansPerBatch, MaxBatchBytes)
+	if err != nil {
+		return nil, fmt.Errorf("编码 span: %w", err)
+	}
 	var written []string
-	for start := 0; start < len(spans); start += MaxSpansPerBatch {
-		end := min(start+MaxSpansPerBatch, len(spans))
-		body, err := otlp.Encode(r.d.Resource, scopeName, r.d.Version, spans[start:end])
-		if err != nil {
-			return written, fmt.Errorf("编码 span: %w", err)
-		}
+	for _, body := range bodies {
 		name, err := r.outbox.Put(body, r.d.Now())
 		if err != nil {
 			return written, fmt.Errorf("写 outbox: %w", err)
@@ -289,6 +293,33 @@ func (r *runner) enqueue(spans []otlp.Span) ([]string, error) {
 		written = append(written, name)
 	}
 	return written, nil
+}
+
+// encodeBatches 先按条数分批，编码后超过 maxBytes 的批次再对半拆分；单个 span 超限时单独成批。
+func encodeBatches(spans []otlp.Span, encode func([]otlp.Span) ([]byte, error), maxSpans, maxBytes int) ([][]byte, error) {
+	var out [][]byte
+	var split func(part []otlp.Span) error
+	split = func(part []otlp.Span) error {
+		body, err := encode(part)
+		if err != nil {
+			return err
+		}
+		if len(body) <= maxBytes || len(part) == 1 {
+			out = append(out, body)
+			return nil
+		}
+		mid := len(part) / 2
+		if err := split(part[:mid]); err != nil {
+			return err
+		}
+		return split(part[mid:])
+	}
+	for start := 0; start < len(spans); start += maxSpans {
+		if err := split(spans[start:min(start+maxSpans, len(spans))]); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 func (r *runner) send(ctx context.Context) {
