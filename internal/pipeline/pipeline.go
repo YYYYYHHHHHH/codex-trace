@@ -37,6 +37,8 @@ type Options struct {
 	Policy trace.Policy
 	// Scan 默认为 rollout.Scan，测试中可替换。
 	Scan func(path string, offset int64) (rollout.Result, error)
+	// ReadContent 默认为 rollout.ReadContent，只在开启内容采集时调用，测试中可替换。
+	ReadContent func(path string, turnIDs map[string]bool) (map[string]rollout.TurnContent, error)
 	// AllowedRoots 是允许读取的 rollout 目录（如 ~/.codex/sessions）；transcript_path 来自 stdin，必须校验。
 	AllowedRoots []string
 	// UserFallback 是 rollout 中没有 creator_user_id 时用于生成 user.id 的原始值（会被哈希）。
@@ -66,6 +68,9 @@ type Processor struct {
 func New(opts Options) *Processor {
 	if opts.Scan == nil {
 		opts.Scan = rollout.Scan
+	}
+	if opts.ReadContent == nil {
+		opts.ReadContent = rollout.ReadContent
 	}
 	if opts.Grace == 0 {
 		opts.Grace = DefaultGrace
@@ -224,7 +229,7 @@ func (p *Processor) flushSession(st *session.State, now time.Time) []otlp.Span {
 		p.scanTranscripts(st, cands, now)
 	}
 
-	var spans []otlp.Span
+	var ready []readyTurn
 	for _, t := range cands {
 		var facts rollout.TurnFacts
 		if f, ok := st.Files[t.TranscriptPath]; ok {
@@ -234,12 +239,20 @@ func (p *Processor) flushSession(st *session.State, now time.Time) []otlp.Span {
 		if !finished && now.Sub(t.ClosedAt) < p.opts.MaxWait {
 			continue
 		}
-		c := p.context(st, t, facts)
-		if !finished {
+		ready = append(ready, readyTurn{turn: t, facts: facts, finished: finished})
+	}
+	contents := p.readContents(ready)
+
+	var spans []otlp.Span
+	for _, r := range ready {
+		t := r.turn
+		c := p.context(st, t, r.facts)
+		c.Content = contents[t.TranscriptPath][t.ID]
+		if !r.finished {
 			c.Partial = true
 			p.opts.Logf("轮次 %s 等待 rollout 超时，按已有信息发出", t.ID)
 		}
-		spans = append(spans, trace.BuildTurn(*t, facts, c, p.opts.Policy)...)
+		spans = append(spans, trace.BuildTurn(*t, r.facts, c, p.opts.Policy)...)
 		st.MarkEmitted(t, now)
 		p.dirty[st.SessionID] = true
 	}
@@ -249,6 +262,45 @@ func (p *Processor) flushSession(st *session.State, now time.Time) []otlp.Span {
 		p.dirty[st.SessionID] = true
 	}
 	return spans
+}
+
+type readyTurn struct {
+	turn     *session.Turn
+	facts    rollout.TurnFacts
+	finished bool
+}
+
+// readContents 在开启内容采集时按 transcript 分组读取模型调用内容，每个文件只读一次。
+// 读取失败只记录日志：轮次照常发出，只是模型调用不带内容。
+func (p *Processor) readContents(ready []readyTurn) map[string]map[string]rollout.TurnContent {
+	if !p.opts.Policy.CaptureContent || len(ready) == 0 {
+		return nil
+	}
+	byPath := map[string]map[string]bool{}
+	for _, r := range ready {
+		path := r.turn.TranscriptPath
+		if path == "" {
+			continue
+		}
+		if byPath[path] == nil {
+			byPath[path] = map[string]bool{}
+		}
+		byPath[path][r.turn.ID] = true
+	}
+	out := make(map[string]map[string]rollout.TurnContent, len(byPath))
+	for path, turns := range byPath {
+		resolved, ok := p.resolveTranscript(path)
+		if !ok {
+			continue
+		}
+		content, err := p.opts.ReadContent(resolved, turns)
+		if err != nil {
+			p.opts.Logf("读取模型调用内容失败: %v", err)
+			continue
+		}
+		out[path] = content
+	}
+	return out
 }
 
 func (p *Processor) candidates(st *session.State, now time.Time) []*session.Turn {

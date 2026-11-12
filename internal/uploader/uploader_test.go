@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +16,7 @@ import (
 	"github.com/YYYYYHHHHHH/codex-trace/internal/event"
 	"github.com/YYYYYHHHHHH/codex-trace/internal/exporter"
 	"github.com/YYYYYHHHHHH/codex-trace/internal/lock"
+	"github.com/YYYYYHHHHHH/codex-trace/internal/otlp"
 	"github.com/YYYYYHHHHHH/codex-trace/internal/paths"
 	"github.com/YYYYYHHHHHH/codex-trace/internal/pipeline"
 	"github.com/YYYYYHHHHHH/codex-trace/internal/queue"
@@ -391,5 +394,53 @@ func TestBackoffSurvivesRestart(t *testing.T) {
 	}
 	if len(e.sender.bodies) != 1 {
 		t.Errorf("restarted uploader must honor persisted backoff, sends = %d", len(e.sender.bodies))
+	}
+}
+
+var spanName = regexp.MustCompile(`"name":"s\d\d"`)
+
+func TestEncodeBatchesSplitsBySize(t *testing.T) {
+	big := strings.Repeat("x", 300<<10)
+	spans := make([]otlp.Span, 40)
+	for i := range spans {
+		spans[i] = otlp.Span{Name: fmt.Sprintf("s%02d", i), Attrs: []otlp.Attr{otlp.String("payload", big)}}
+	}
+	encode := func(s []otlp.Span) ([]byte, error) {
+		return otlp.Encode(nil, "scope", "v", s)
+	}
+
+	bodies, err := encodeBatches(spans, encode, 100, 4<<20)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) < 3 {
+		t.Fatalf("12MB of spans should be split into several batches, got %d", len(bodies))
+	}
+	total := 0
+	for _, b := range bodies {
+		if len(b) > 4<<20 {
+			t.Errorf("batch of %d bytes exceeds limit", len(b))
+		}
+		total += len(spanName.FindAll(b, -1))
+	}
+	if total != len(spans) {
+		t.Errorf("spans across batches = %d, want %d", total, len(spans))
+	}
+}
+
+func TestEncodeBatchesKeepsOversizedSingleSpan(t *testing.T) {
+	spans := []otlp.Span{{Name: "huge", Attrs: []otlp.Attr{otlp.String("p", strings.Repeat("x", 2<<20))}}}
+	bodies, err := encodeBatches(spans, func(s []otlp.Span) ([]byte, error) { return otlp.Encode(nil, "scope", "v", s) }, 100, 1<<20)
+	if err != nil || len(bodies) != 1 {
+		t.Fatalf("single oversized span should be sent alone: %d bodies, err=%v", len(bodies), err)
+	}
+}
+
+func TestEncodeBatchesRespectsSpanCount(t *testing.T) {
+	spans := make([]otlp.Span, 250)
+	bodies, err := encodeBatches(spans, func(s []otlp.Span) ([]byte, error) { return otlp.Encode(nil, "scope", "v", s) }, 100, 4<<20)
+	if err != nil || len(bodies) != 3 {
+		t.Fatalf("250 small spans should make 3 batches, got %d (%v)", len(bodies), err)
 	}
 }

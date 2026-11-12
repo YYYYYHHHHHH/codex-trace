@@ -42,6 +42,8 @@ type Context struct {
 	AgentPath    string
 	AgentNick    string
 	Partial      bool // 等待 rollout 超时，事实可能不完整
+	// Content 是由 rollout 重建的模型调用内容，只在开启内容采集时读取。
+	Content rollout.TurnContent
 }
 
 // HashID 把用户 / 机器标识单向哈希后再上传。
@@ -73,7 +75,11 @@ func BuildTurn(t session.Turn, f rollout.TurnFacts, c Context, p Policy) []otlp.
 	}
 	model := firstNonEmpty(f.Model, t.Model)
 	for _, g := range f.Generations {
-		spans = append(spans, buildGenerationSpan(g, model, f.Effort, turnSpan))
+		gen := buildGenerationSpan(g, model, f.Effort, turnSpan)
+		if p.CaptureContent {
+			gen.Attrs = append(gen.Attrs, generationContent(g.ResponseID, c.Content)...)
+		}
+		spans = append(spans, gen)
 	}
 	// Langfuse v4 按 observation 存储 environment / session / user，不会从父 span 继承，
 	// 子 span 需要各自携带，否则按 environment 或会话筛选时会漏掉工具与模型调用。
@@ -287,8 +293,12 @@ func buildGenerationSpan(g rollout.Generation, model, effort string, parent otlp
 // content 先粗截断到上限的若干倍（控制脱敏开销），再脱敏，最后精确截断。
 // 先脱敏后截断，避免截断恰好切开密钥使其逃过匹配。
 func content(s string, p Policy) string {
+	return clip(s, p.MaxFieldBytes)
+}
+
+func clip(s string, max int) string {
 	const precut = 4
-	return redact.Truncate(redact.Text(redact.Truncate(s, precut*p.MaxFieldBytes)), p.MaxFieldBytes)
+	return redact.Truncate(redact.Text(redact.Truncate(s, precut*max)), max)
 }
 
 func appendNonEmpty(attrs []otlp.Attr, key, value string) []otlp.Attr {

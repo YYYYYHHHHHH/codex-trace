@@ -11,6 +11,7 @@ import (
 
 	"github.com/YYYYYHHHHHH/codex-trace/internal/event"
 	"github.com/YYYYYHHHHHH/codex-trace/internal/otlp"
+	"github.com/YYYYYHHHHHH/codex-trace/internal/rollout"
 	"github.com/YYYYYHHHHHH/codex-trace/internal/session"
 	"github.com/YYYYYHHHHHH/codex-trace/internal/trace"
 )
@@ -247,6 +248,64 @@ func TestContentIsRedactedWhenCaptureEnabled(t *testing.T) {
 	}
 	if in.Value.AsString() == "" {
 		t.Error("trace input should not be empty")
+	}
+}
+
+func TestGenerationContentIsReadOnceWhenCaptureEnabled(t *testing.T) {
+	root, recs := loadFixture(t, "subagent-resume")
+	for _, capture := range []bool{false, true} {
+		reads := map[string]int{}
+		p := New(Options{
+			Store: session.NewStore(t.TempDir()), Policy: trace.Policy{CaptureContent: capture},
+			AllowedRoots: []string{root}, UserFallback: "alice",
+			ReadContent: func(path string, turns map[string]bool) (map[string]rollout.TurnContent, error) {
+				reads[path]++
+				return rollout.ReadContent(path, turns)
+			},
+		})
+		ingestAll(t, p, recs)
+
+		spans := p.Flush(recs[len(recs)-1].ReceivedAt.Add(time.Minute))
+
+		withInput := 0
+		for _, s := range spans {
+			typ, _ := attr(s, "langfuse.observation.type")
+			if _, ok := attr(s, "langfuse.observation.input"); ok && typ.Value.AsString() == "generation" {
+				withInput++
+			}
+		}
+		if !capture {
+			if len(reads) != 0 || withInput != 0 {
+				t.Errorf("capture off: reads=%v generations with input=%d", reads, withInput)
+			}
+			continue
+		}
+		if len(reads) == 0 || withInput == 0 {
+			t.Fatalf("capture on: reads=%v generations with input=%d", reads, withInput)
+		}
+		for path, n := range reads {
+			if n != 1 {
+				t.Errorf("%s read %d times in one flush", filepath.Base(path), n)
+			}
+		}
+	}
+}
+
+func TestGenerationContentReadFailureStillEmitsTurn(t *testing.T) {
+	root, recs := loadFixture(t, "subagent-resume")
+	p := New(Options{
+		Store: session.NewStore(t.TempDir()), Policy: trace.Policy{CaptureContent: true},
+		AllowedRoots: []string{root}, UserFallback: "alice",
+		ReadContent: func(string, map[string]bool) (map[string]rollout.TurnContent, error) {
+			return nil, errors.New("disk on fire")
+		},
+	})
+	ingestAll(t, p, recs)
+
+	spans := p.Flush(recs[len(recs)-1].ReceivedAt.Add(time.Minute))
+
+	if _, ok := index(spans)[trace.TurnSpanID(turn1)]; !ok {
+		t.Fatal("turn must still be emitted when content cannot be read")
 	}
 }
 
