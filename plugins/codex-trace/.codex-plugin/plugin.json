@@ -1,7 +1,7 @@
 {
   "name": "codex-trace",
-  "version": "0.1.0",
-  "description": "采集 Codex 调用链（轮次、工具调用、子 agent、模型调用与 token）并上报到团队的 Langfuse。默认只上报元数据，不上传 prompt 与工具输出原文。",
+  "version": "0.2.0",
+  "description": "采集 Codex 调用链（轮次、工具调用、子 agent、模型调用与 token）并上报到团队的 Langfuse。默认同时上报脱敏、截断后的 prompt、回复与工具输入输出，可用 capture_content=false 关闭。",
   "author": {
     "name": "codex-trace"
   },
@@ -11,7 +11,7 @@
   "interface": {
     "displayName": "Codex Trace",
     "shortDescription": "把 Codex 调用链上报到 Langfuse",
-    "longDescription": "安装并审批 hook 后自动采集 Codex 调用链：每轮对话、工具调用（含退出码与耗时）、子 agent 关系、模型调用的 token 用量，上报到团队的 Langfuse。默认只上报元数据（名称、长度、耗时、token），不上传 prompt 与工具输出原文。可随时用 trace-hook pause 暂停。",
+    "longDescription": "安装并审批 hook 后自动采集 Codex 调用链：每轮对话、工具调用（含退出码与耗时）、子 agent 关系、模型调用的 token 用量，上报到团队的 Langfuse。默认同时上报 prompt、最终回复与工具输入输出（上传前遮蔽常见密钥并截断到 10KB；系统提示词与推理过程不上传），可在 ~/.config/codex-trace/config.toml 中设置 capture_content = false 只上报元数据。可随时用 trace-hook pause 暂停。",
     "developerName": "codex-trace",
     "category": "Productivity",
     "capabilities": []

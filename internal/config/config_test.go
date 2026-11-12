@@ -65,6 +65,41 @@ func TestLoadWithoutAnyCredentialsIsNotConfigured(t *testing.T) {
 	}
 }
 
+func TestBuiltinCanEnableCaptureContent(t *testing.T) {
+	b := testBuiltin
+	b.CaptureContent = true
+
+	cfg := Load(testPaths(t), noEnv, b)
+
+	if !cfg.CaptureContent {
+		t.Error("builtin capture_content=true should enable content capture")
+	}
+	if cfg.Sources["capture_content"] != SourceBuiltin {
+		t.Errorf("capture_content source = %q, want builtin", cfg.Sources["capture_content"])
+	}
+}
+
+func TestUserAndEnvCanDisableBuiltinCaptureContent(t *testing.T) {
+	b := testBuiltin
+	b.CaptureContent = true
+
+	p := testPaths(t)
+	writeFile(t, p.UserConfigFile, "capture_content = false\n", 0o600)
+	if cfg := Load(p, noEnv, b); cfg.CaptureContent || cfg.Sources["capture_content"] != SourceUser {
+		t.Errorf("user file should disable builtin capture_content: %v (%s)", cfg.CaptureContent, cfg.Sources["capture_content"])
+	}
+
+	env := func(k string) string {
+		if k == "CODEX_TRACE_CAPTURE_CONTENT" {
+			return "false"
+		}
+		return ""
+	}
+	if cfg := Load(testPaths(t), env, b); cfg.CaptureContent || cfg.Sources["capture_content"] != SourceEnv {
+		t.Errorf("env should disable builtin capture_content: %v (%s)", cfg.CaptureContent, cfg.Sources["capture_content"])
+	}
+}
+
 func TestUserFileOverridesBuiltin(t *testing.T) {
 	p := testPaths(t)
 	writeFile(t, p.UserConfigFile, `

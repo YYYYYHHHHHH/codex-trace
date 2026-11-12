@@ -8,4 +8,6 @@ var (
 	LangfusePublicKey = ""
 	LangfuseSecretKey = ""
 	Environment       = ""
+	// CaptureContent 为 "true" 时内置默认开启内容采集（-X 只能注入字符串）。
+	CaptureContent = ""
 )

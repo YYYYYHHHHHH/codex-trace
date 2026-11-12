@@ -7,13 +7,14 @@
 在构建机上创建 `~/.config/codex-trace/build.env`（**必须 `chmod 600`，不要提交到仓库**）：
 
 ```sh
-CODEX_TRACE_LANGFUSE_HOST=https://<langfuse 地址>
-CODEX_TRACE_LANGFUSE_PUBLIC_KEY=pk-lf-...
-CODEX_TRACE_LANGFUSE_SECRET_KEY=sk-lf-...
+CODEX_TRACE_LANGFUSE_HOST=https://ingest.iluvai.org   # 上报网关，不是 Langfuse 本身
+CODEX_TRACE_LANGFUSE_PUBLIC_KEY=codex-trace
+CODEX_TRACE_LANGFUSE_SECRET_KEY=ctgw_...              # 网关 token
 CODEX_TRACE_ENVIRONMENT=production
+CODEX_TRACE_CAPTURE_CONTENT=true                      # 内置默认开启内容采集（true / false，省略为 false）
 ```
 
-建议为 codex-trace 单独建一个 Langfuse project，只存 Codex 调用链。
+真实 Langfuse key **不进入二进制**，只放在 Worker secret 与本机 `~/.config/codex-trace/langfuse.env`（键名相同，供读回校验）。网关的部署、验证与轮换见 [ingest-gateway.md](ingest-gateway.md)。
 
 ### 构建
 
@@ -41,18 +42,14 @@ make dist      # 四平台二进制 → plugins/codex-trace/bin/<os>-<arch>/trac
 
 仓库：公开仓库 `YYYYYHHHHHH/codex-trace`，客户以 `codex plugin marketplace add YYYYYHHHHHH/codex-trace@release` 接入，无需授权。
 
-> **已知风险（已接受）**：发布版内置的 secret key 可以从二进制中提取。2026-11-10 起仓库公开，用户明确接受内置 key 可被任何人提取的风险（可读写、删除该 Langfuse project 的数据），并决定不轮换 key。如需收回风险：在 Langfuse 中轮换 key 并重新发布，或改用只写网关（PLAN 方案 B）。
+> **内置凭证**：v0.2.0 起二进制中只有网关 token，提取后只能写入 trace，无法读取、删除 Langfuse 中的数据（v0.1.0 内置的是可读写的 Langfuse key，已在 Langfuse 中删除）。网关 token 被滥用时按 [ingest-gateway.md](ingest-gateway.md) 第 6 节轮换。
 
 ## 2. 凭证轮换
 
-按需手动执行，没有定时吊销：
+见 [ingest-gateway.md](ingest-gateway.md) 第 6 节：
 
-1. 在 Langfuse 中为该 project 新建一对 key。
-2. 更新 `build.env`，按第 1 节重新构建并发布新版本。
-3. 通知客户升级插件并重新审批 hook。
-4. 确认客户已普遍升级后（可在 Langfuse 中按 `langfuse.release` 查看各版本的上报情况），由维护人员决定何时在 Langfuse 中删除旧 key。删除后仍在用旧版本的机器会收到 401，数据保留在本地 outbox 并持续重试，升级后自动补传。
-
-紧急情况（key 泄漏）：直接在 Langfuse 删除旧 key，同时发布新版本。
+- **Langfuse key** 只在网关上，轮换后更新 Worker secret 即可，客户端无需升级。
+- **网关 token** 内置在二进制中，轮换需要发版；`INGEST_TOKENS` 支持新旧并存，客户普遍升级后再移除旧 token。移除后仍在用旧版本的机器会收到 401，数据保留在本地 outbox 并持续重试，升级后自动补传。
 
 ## 3. 客户端排障
 
@@ -118,8 +115,8 @@ make test       # 测试
 make vet        # gofmt + go vet
 make cover      # 覆盖率
 make e2e        # 本机端到端：假 OTLP 接收器 + 真实 codex exec 会话（会临时安装 / 卸载插件，消耗少量模型额度）
-make e2e-langfuse  # 同上，但上报到 build.env 中的真实 Langfuse（environment=codex-trace-e2e）并读回校验
-make smoke      # 真实 Langfuse 冒烟：发送 fixture 会话、读回比对、重复发送检查去重（environment 取自 build.env）
+make e2e-langfuse  # 同上，但按 build.env 经网关上报（environment=codex-trace-e2e），用 langfuse.env 读回校验
+make smoke      # 真实 Langfuse 冒烟：按 build.env 发送 fixture 会话、用 langfuse.env 读回比对、重复发送检查去重（environment 取自 build.env）
 ```
 
 重新采集 hook payload（Codex 升级后核对格式）：`scripts/capture-install.py install`，跑会话后 `uninstall`，见 [payload-notes.md](payload-notes.md)。

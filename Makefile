@@ -23,13 +23,14 @@ dist:
 e2e:
 	./scripts/e2e.sh
 
-# 本机端到端测试：上报到 build.env 中的真实 Langfuse（environment=codex-trace-e2e）并读回校验
+# 本机端到端测试：按 build.env 上报（environment=codex-trace-e2e），用 READ_ENV 中的真实 key 读回校验
 e2e-langfuse:
 	E2E_TARGET=langfuse ./scripts/e2e.sh
 
-# 真实 Langfuse 冒烟：发送 fixture 会话、读回比对、重复发送检查去重
+# 真实 Langfuse 冒烟：按 build.env 发送 fixture 会话（可经网关），用 READ_ENV 中的真实 key 读回比对、重复发送检查去重
+READ_ENV ?= $(HOME)/.config/codex-trace/langfuse.env
 smoke:
-	go run ./tools/lfsmoke fixture -resend
+	go run ./tools/lfsmoke fixture -resend -read-env "$(READ_ENV)"
 
 clean:
 	rm -rf bin coverage.out plugins/codex-trace/bin/darwin-* plugins/codex-trace/bin/linux-*
