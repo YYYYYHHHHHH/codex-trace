@@ -1,0 +1,22 @@
+# codex-trace 上报网关。部署与 secret 设置见 docs/ingest-gateway.md。
+name = "codex-trace-ingest"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+workers_dev = false
+
+routes = [{ pattern = "ingest.iluvai.org", custom_domain = true }]
+
+[vars]
+LANGFUSE_HOST = "https://langfuse.iluvai.org"
+
+# 每个客户端 IP 每分钟最多 300 次（按 Cloudflare 节点近似计数）；超出返回 429，客户端按 Retry-After 退避重试。
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1001"
+
+  [ratelimits.simple]
+  limit = 300
+  period = 60
+
+[observability]
+enabled = true

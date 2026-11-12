@@ -160,15 +160,46 @@ func TestBuildDistInjectsCredentialsWithoutEchoingSecret(t *testing.T) {
 	}
 }
 
+func TestBuildDistInjectsCaptureContentDefault(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a binary")
+	}
+	cases := map[string]string{
+		"enabled":  "CODEX_TRACE_CAPTURE_CONTENT=true\n",
+		"disabled": "CODEX_TRACE_CAPTURE_CONTENT=false\n",
+		"omitted":  "CODEX_TRACE_ENVIRONMENT=test\n",
+	}
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			output, code, bin := buildDist(t, buildEnv(t, content, 0o600))
+			if code != 0 {
+				t.Fatalf("build failed (%d):\n%s", code, output)
+			}
+			cfg, _, _ := run(t, t.TempDir(), "", []string{"CODEX_TRACE_CONFIG=/nonexistent", "CODEX_TRACE_STATE_DIR=" + t.TempDir()}, bin, "config", "show")
+			var line string
+			for _, l := range strings.Split(cfg, "\n") {
+				if strings.Contains(l, "capture_content") {
+					line = l
+				}
+			}
+			want := name == "enabled"
+			if got := strings.Contains(line, "true"); got != want {
+				t.Errorf("capture_content line = %q, want enabled=%v", line, want)
+			}
+		})
+	}
+}
+
 func TestBuildDistRejectsUnsafeEnvFiles(t *testing.T) {
 	cases := map[string]struct {
 		content string
 		mode    os.FileMode
 		want    string
 	}{
-		"group readable": {"CODEX_TRACE_ENVIRONMENT=x\n", 0o640, "chmod 600"},
-		"whitespace":     {"CODEX_TRACE_ENVIRONMENT=a b\n", 0o600, "空白"},
-		"unknown key":    {"EVIL=x\n", 0o600, "未知配置项"},
+		"group readable":        {"CODEX_TRACE_ENVIRONMENT=x\n", 0o640, "chmod 600"},
+		"whitespace":            {"CODEX_TRACE_ENVIRONMENT=a b\n", 0o600, "空白"},
+		"unknown key":           {"EVIL=x\n", 0o600, "未知配置项"},
+		"invalid capture value": {"CODEX_TRACE_CAPTURE_CONTENT=yes\n", 0o600, "true 或 false"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

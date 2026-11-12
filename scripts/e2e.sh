@@ -3,8 +3,9 @@
 #
 # 目标（E2E_TARGET）：
 #   fake（默认）    本地假 OTLP 接收器，用 fakeotlp verify 断言；
-#   langfuse        真实 Langfuse，凭证取自 BUILD_ENV（默认 ~/.config/codex-trace/build.env），
-#                   environment 固定为 codex-trace-e2e，用 lfsmoke verify 从 Langfuse 读回断言。
+#   langfuse        真实上报链路，构建凭证取自 BUILD_ENV（默认 ~/.config/codex-trace/build.env，可指向上报网关），
+#                   environment 固定为 codex-trace-e2e；用 READ_ENV（默认 ~/.config/codex-trace/langfuse.env，
+#                   真实 Langfuse key）经 lfsmoke verify 读回断言。BUILD_ENV 开启 capture_content 时断言带内容，否则断言无内容。
 #
 # 流程：启动 fakeotlp（fake 模式）→ 把插件复制到临时目录，作为独立 marketplace（codex-trace-e2e）构建并安装 →
 #      跑三段会话（子 agent / resume / 打断）→ 等待上传 → fakeotlp verify 断言调用树 →
@@ -39,6 +40,7 @@ export CODEX_TRACE_STATE_DIR="$work/state"
 
 target=${E2E_TARGET:-fake}
 user_build_env=${BUILD_ENV:-$HOME/.config/codex-trace/build.env}
+read_env=${READ_ENV:-$HOME/.config/codex-trace/langfuse.env}
 case "$target" in
   fake)
     port=$(python3 -I -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
@@ -47,6 +49,7 @@ case "$target" in
     ;;
   langfuse)
     [ -f "$user_build_env" ] || { echo "E2E_TARGET=langfuse 需要 $user_build_env" >&2; exit 1; }
+    [ -f "$read_env" ] || { echo "E2E_TARGET=langfuse 需要读回凭证 $read_env" >&2; exit 1; }
     ;;
   *)
     echo "未知 E2E_TARGET=${target}（可选 fake / langfuse）" >&2
@@ -206,7 +209,9 @@ if [ "$target" = fake ]; then
 else
   sessions=$(ls "$CODEX_TRACE_STATE_DIR/sessions" | sed -n 's/\.json$//p' | paste -sd, -)
   echo "会话：$sessions"
-  (cd "$root" && go run ./tools/lfsmoke verify -env "$work/build.env" -session "$sessions" -min-turns 3 \
-    -expect-subagent -expect-failed-tool -expect-interrupted -no-content)
+  content_check=-no-content
+  grep -q '^CODEX_TRACE_CAPTURE_CONTENT=true$' "$work/build.env" && content_check=-expect-content
+  (cd "$root" && go run ./tools/lfsmoke verify -env "$read_env" -environment codex-trace-e2e -session "$sessions" \
+    -min-turns 3 -expect-subagent -expect-failed-tool -expect-interrupted "$content_check")
 fi
 completed=1

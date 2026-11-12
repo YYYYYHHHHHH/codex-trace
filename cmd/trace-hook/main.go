@@ -72,10 +72,11 @@ func runHook(args []string, stdin io.Reader) {
 
 func builtin() config.Builtin {
 	return config.Builtin{
-		Host:        buildinfo.LangfuseHost,
-		PublicKey:   buildinfo.LangfusePublicKey,
-		SecretKey:   buildinfo.LangfuseSecretKey,
-		Environment: buildinfo.Environment,
+		Host:           buildinfo.LangfuseHost,
+		PublicKey:      buildinfo.LangfusePublicKey,
+		SecretKey:      buildinfo.LangfuseSecretKey,
+		Environment:    buildinfo.Environment,
+		CaptureContent: buildinfo.CaptureContent == "true",
 	}
 }
 

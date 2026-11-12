@@ -23,6 +23,7 @@ host=
 public_key=
 secret_key=
 environment=
+capture_content=
 if [ -f "$build_env" ]; then
   # 可移植的属主 / 权限检查（BSD 与 GNU 的 stat 参数不同，这里用 find）
   [ -n "$(find "$build_env" -user "$(id -u)" -print)" ] || fail "${build_env} 不属于当前用户"
@@ -39,17 +40,20 @@ if [ -f "$build_env" ]; then
       CODEX_TRACE_LANGFUSE_PUBLIC_KEY) public_key=$value ;;
       CODEX_TRACE_LANGFUSE_SECRET_KEY) secret_key=$value ;;
       CODEX_TRACE_ENVIRONMENT) environment=$value ;;
+      CODEX_TRACE_CAPTURE_CONTENT)
+        case "$value" in true | false) capture_content=$value ;; *) fail "${key} 只能是 true 或 false" ;; esac
+        ;;
       *) fail "未知配置项 ${key}" ;;
     esac
   done <"$build_env"
-  echo "build-dist: 使用 ${build_env}（host=${host}，environment=${environment}）"
+  echo "build-dist: 使用 ${build_env}（host=${host}，environment=${environment}，capture_content=${capture_content:-false}）"
 else
   echo "build-dist: 未找到 ${build_env}，构建不含内置凭证的二进制"
 fi
 
 ldflags="-s -w -X $pkg.Version=$version -X $pkg.LangfuseHost=$host"
 ldflags="$ldflags -X $pkg.LangfusePublicKey=$public_key -X $pkg.LangfuseSecretKey=$secret_key"
-ldflags="$ldflags -X $pkg.Environment=$environment"
+ldflags="$ldflags -X $pkg.Environment=$environment -X $pkg.CaptureContent=$capture_content"
 
 for p in $platforms; do
   os=${p%/*}

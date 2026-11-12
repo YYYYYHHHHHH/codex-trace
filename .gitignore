@@ -6,3 +6,5 @@ config.local.toml
 *.test
 coverage.out
 /plugins/codex-trace/bin/*-*/
+.wrangler/
+node_modules/

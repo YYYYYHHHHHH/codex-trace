@@ -33,10 +33,11 @@ const (
 
 // Builtin 是构建时注入的默认值。
 type Builtin struct {
-	Host        string
-	PublicKey   string
-	SecretKey   string
-	Environment string
+	Host           string
+	PublicKey      string
+	SecretKey      string
+	Environment    string
+	CaptureContent bool
 }
 
 // Config 是生效配置；Load 每次返回新值，调用方不应修改。
@@ -132,6 +133,11 @@ func applyBuiltin(cfg Config, b Builtin) Config {
 	set("public_key", &cfg.PublicKey, b.PublicKey)
 	set("secret_key", &cfg.SecretKey, b.SecretKey)
 	set("environment", &cfg.Environment, b.Environment)
+	// 内置值只能打开内容采集；用户、环境变量、托管配置仍可显式关闭。
+	if b.CaptureContent {
+		cfg.CaptureContent = true
+		cfg.Sources["capture_content"] = SourceBuiltin
+	}
 	return cfg
 }
 

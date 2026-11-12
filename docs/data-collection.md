@@ -7,14 +7,14 @@
 ```text
 Codex hook（本机）──▶ 本地 spool（~/.local/state/codex-trace，仅本人可读）
                        └─▶ 后台上传进程：关联 Codex 本地会话记录（~/.codex/sessions）补全 token 等
-                             └─▶ HTTPS 上报到团队 Langfuse（OTLP）
+                             └─▶ HTTPS 上报到上报网关（OTLP）──▶ 团队 Langfuse
 ```
 
-- 上报目的地只有一个：插件内置的团队 Langfuse 地址。
+- 上报目的地只有一个：插件内置的上报网关（`ingest.iluvai.org`），网关只接受写入并原样转发到团队 Langfuse。插件中不含能读取 Langfuse 数据的凭证。
 - 本地文件权限为 0600 / 目录 0700。
-- 默认（`capture_content=false`）时，prompt、工具输入输出、模型回复**在写入本地 spool 之前就被剥离**，只保留字节数。
+- v0.2.0 起默认上报对话内容（`capture_content=true`，脱敏并截断后上传，见第 3 节）。关闭后（`capture_content=false`），prompt、工具输入输出、模型回复**在写入本地 spool 之前就被剥离**，只保留字节数。
 
-## 2. 默认上报的字段（`capture_content=false`）
+## 2. 始终上报的元数据
 
 ### 每轮对话（trace 根节点）
 
@@ -54,9 +54,9 @@ Codex hook（本机）──▶ 本地 spool（~/.local/state/codex-trace，仅�
 
 `service.name=codex`、插件版本、**机器标识的单向哈希**（来自 `~/.codex/installation_id`）。
 
-## 3. 开启内容采集后额外上报的字段（`capture_content=true`）
+## 3. 对话内容（默认上报，`capture_content=true`）
 
-需要由维护人员针对特定机器开启（用户配置或托管配置）。额外上报：
+v0.2.0 起默认开启。额外上报：
 
 - 每轮的 prompt 与最终回复
 - 每次工具调用的输入与输出
@@ -67,6 +67,14 @@ Codex hook（本机）──▶ 本地 spool（~/.local/state/codex-trace，仅�
 2. 每个字段截断到 10KB。
 
 **模型的系统提示词、推理过程（reasoning）在任何模式下都不会上传。**
+
+关闭内容采集（只上报第 2 节的元数据），任选其一：
+
+- 用户配置 `~/.config/codex-trace/config.toml`（权限 600）写入 `capture_content = false`；
+- 环境变量 `CODEX_TRACE_CAPTURE_CONTENT=false`（需对 Codex 进程可见）；
+- 企业通过托管配置统一下发 `capture_content = false`（见 [managed-deployment.md](managed-deployment.md)），优先级最高。
+
+`trace-hook config show` 可查看当前是否开启及其来源。
 
 ## 4. 不采集的内容
 

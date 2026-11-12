@@ -64,6 +64,7 @@ func defaultEnvFile() string {
 func runFixture(args []string) int {
 	fs := flag.NewFlagSet("fixture", flag.ExitOnError)
 	envFile := fs.String("env", defaultEnvFile(), "凭证文件")
+	readEnvFile := fs.String("read-env", "", "读回用的凭证文件（-env 指向上报网关时需指定真实 Langfuse key；默认同 -env）")
 	fixture := fs.String("fixture", "testdata/sessions/subagent-resume", "会话 fixture 目录")
 	wait := fs.Duration("wait", 90*time.Second, "等待 Langfuse 落库的最长时间")
 	resend := fs.Bool("resend", false, "再发送一次同一批 span，检查去重")
@@ -98,7 +99,13 @@ func runFixture(args []string) int {
 	}
 	send("第一次发送")
 
-	a := newAPI(c)
+	rc := c
+	if *readEnvFile != "" {
+		if rc, err = loadCreds(*readEnvFile); err != nil {
+			fail(err)
+		}
+	}
+	a := newAPI(rc)
 	query := func() ([]obs, int, error) { return a.byTraces(keys(traceIDs)) }
 	all, raw, err := a.waitFor(query, len(spans), *wait)
 	if err != nil {
@@ -149,6 +156,7 @@ func runVerify(args []string) int {
 	expectFailed := fs.Bool("expect-failed-tool", false, "要求存在 ERROR 的工具调用")
 	expectInterrupted := fs.Bool("expect-interrupted", false, "要求存在带 interrupted 标签的轮次")
 	noContent := fs.Bool("no-content", false, "要求没有上传 input / output 内容")
+	expectContent := fs.Bool("expect-content", false, "要求每个主轮次都带 input，且存在带 input 的工具调用")
 	wait := fs.Duration("wait", 120*time.Second, "等待 Langfuse 落库的最长时间")
 	_ = fs.Parse(args)
 
@@ -220,6 +228,21 @@ func runVerify(args []string) int {
 			}
 		}
 		ck.check(leaked == 0, "没有上传 input / output 内容（%d 个 observation 带内容）", leaked)
+	}
+	if *expectContent {
+		turns, tools := 0, 0
+		for _, r := range roots {
+			if str(r, "input") != "" {
+				turns++
+			}
+		}
+		for _, o := range all {
+			if str(o, "type") == "TOOL" && str(o, "input") != "" {
+				tools++
+			}
+		}
+		ck.check(len(roots) > 0 && turns == len(roots), "主轮次带 prompt 内容（%d/%d）", turns, len(roots))
+		ck.check(tools > 0, "工具调用带输入内容（%d 个）", tools)
 	}
 	return ck.result()
 }

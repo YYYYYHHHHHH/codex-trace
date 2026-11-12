@@ -217,7 +217,7 @@ CODEX_TRACE_ENVIRONMENT=codex-trace-dev
 
 | # | 决策 | 推荐 | 理由 |
 |---|---|---|---|
-| D1 | 内容采集默认值 | `capture_content=false` | 客户合规更容易通过；需要排查时再按机器开启 |
+| D1 | 内容采集默认值 | ~~`capture_content=false`~~ **已改：v0.2.0 默认开启**（2026-11-11） | 会话页需要看到对话内容；同时上线只写网关，二进制不再含可读 key |
 | D2 | 构建产物如何进入 git marketplace | 单独的 `release` 分支提交 `bin/`，`main` 只放源码 | marketplace 按 git 快照分发，二进制必须在仓库里；分开放避免 `main` 历史膨胀，且内置 key 只存在于 `release` 分支的二进制中 |
 | D3 | Windows | 本次不做，文档中注明 | hook 启动脚本依赖 POSIX sh，Windows 的 hook 执行方式需单独验证 |
 | D4 | E2E 后本机是否保留插件 | 卸载 | 保留并在桌面端审批后，你所有真实 Codex 会话都会上传 |
@@ -232,6 +232,6 @@ CODEX_TRACE_ENVIRONMENT=codex-trace-dev
 | Codex hook / rollout 格式随版本变化（当前为 alpha 版） | payload 与 rollout 解析容错（未知字段忽略、缺字段降级）；事件里带 Codex 版本便于排查；fixture 按版本归档 |
 | 插件升级需重新审批 hook，客户可能没注意到导致静默停采 | `status` / `doctor` 显示"最近一次 hook 触发时间"；企业客户推荐托管下发 |
 | macOS Gatekeeper 拦截未签名二进制 | M6 实测；git 克隆的文件通常不带 quarantine 属性，若被拦则在文档中给出处理方式，并记录签名需求 |
-| 内置 key 随插件泄漏（仓库已公开，**风险已接受**） | 默认不传内容；发现滥用时按 3.1 节流程轮换；长期可迁移到只写网关方案 B |
+| 内置凭证随插件泄漏（仓库公开） | v0.2.0 起只内置网关 token（只写），真实 Langfuse key 只在网关上，见 [ingest-gateway.md](ingest-gateway.md) |
 | 装完即自动上报，客户未充分知情 | 插件描述与 `install.md` 首段写明采集内容；`docs/data-collection.md` 供客户合规评审；提供 `pause` 和 `enabled=false` |
 | 后台上传进程被系统或用户杀掉 | spool 持久化，下次 hook 触发时自动重新拉起，不丢数据 |
