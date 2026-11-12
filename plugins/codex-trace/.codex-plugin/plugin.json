@@ -1,6 +1,6 @@
 {
   "name": "codex-trace",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "采集 Codex 调用链（轮次、工具调用、子 agent、模型调用与 token）并上报到团队的 Langfuse。默认同时上报脱敏、截断后的 prompt、回复与工具输入输出，可用 capture_content=false 关闭。",
   "author": {
     "name": "codex-trace"
