@@ -10,7 +10,7 @@
 
 | 凭证 | 存放位置 | 泄露后能做什么 |
 |---|---|---|
-| 网关 token（`ctgw_…`） | 内置在插件二进制中 | 只能向 Langfuse 写入 trace |
+| 网关 token（`ctgw_…`） | 内置在插件二进制中 | 只能写入 trace，读不到任何数据；理论上可覆盖已知 id 的数据（id 由 Codex 随机 id 派生，无法读出） |
 | Langfuse public / secret key | 只在 Worker secret 与维护人员本机 `langfuse.env` 中 | 读写删全部数据 |
 
 客户端代码不需要改：网关地址作为 `langfuse_host`，`public_key` 填任意标识（`codex-trace`），`secret_key` 填网关 token，仍走 Basic Auth 与 `/api/public/otel/v1/traces`。
@@ -18,10 +18,10 @@
 ## 2. 网关行为
 
 - 只接受 `POST /api/public/otel/v1/traces`；其他路径 404，其他方法 405。
+- 先按客户端 IP 限速（鉴权失败的请求也计数）：每分钟 300 次（Cloudflare 按节点近似计数），超出返回 429 + `Retry-After: 60`；客户端会按 `Retry-After` 退避重试。
 - Basic Auth 的密码必须命中 `INGEST_TOKENS`（逗号分隔，可多个并存）之一，否则 401；比较前先做 SHA-256，避免时序泄露。
-- 必须带 `Content-Length` 且不超过 5MB（411 / 413）。
-- 通过鉴权的请求按客户端 IP 限速：每分钟 300 次（Cloudflare 按节点近似计数），超出返回 429 + `Retry-After: 60`；客户端会按 `Retry-After` 退避重试。
-- 只转发 `Content-Type`、`Content-Encoding`、`User-Agent`，换上真实 Langfuse 凭证；上游响应的状态码与响应体原样返回（只保留 `Content-Type`、`Retry-After` 头），上游不可达时返回 502。
+- 只接受 gzip 或不压缩（否则 415）；必须带 `Content-Length` 且不超过 5MB（411 / 413）；网关会流式解压计数，解压后超过 32MB 返回 413（防 gzip 炸弹），gzip 损坏返回 400。转发的仍是原始字节。
+- 只转发 `Content-Type`、`Content-Encoding`、`User-Agent`，换上真实 Langfuse 凭证。上游 2xx 原样返回（客户端要读 `partialSuccess`）；非 2xx 只返回状态码、`Retry-After` 与通用说明，上游响应体只写入 Worker 日志；上游不可达时返回 502。
 - secret 缺失时一律返回 500，不会放行。
 
 客户端对 401 / 429 / 5xx 都会保留数据并重试，所以网关临时故障或 token 轮换期间不会丢数据。

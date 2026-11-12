@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { MAX_BODY_BYTES, TRACES_PATH, basicPassword, handle, tokenAllowed } from "./worker.js";
+import { gzipSync } from "node:zlib";
+
+import { MAX_BODY_BYTES, MAX_DECODED_BYTES, TRACES_PATH, basicPassword, decodedSize, handle, tokenAllowed } from "./worker.js";
 
 const ENV = {
   LANGFUSE_HOST: "https://langfuse.example.com/",
@@ -17,7 +19,7 @@ function basic(user, password) {
 }
 
 function post(body, headers = {}, path = TRACES_PATH) {
-  const bytes = new TextEncoder().encode(body);
+  const bytes = typeof body === "string" ? new Uint8Array(gzipSync(body)) : body;
   return new Request(GATEWAY + path, {
     method: "POST",
     body: bytes,
@@ -37,7 +39,7 @@ function post(body, headers = {}, path = TRACES_PATH) {
 function fakeUpstream(response = new Response('{"partialSuccess":{}}', { status: 200 })) {
   const calls = [];
   const impl = async (url, init) => {
-    calls.push({ url, init, body: new TextDecoder().decode(init.body) });
+    calls.push({ url, init, body: new Uint8Array(init.body) });
     return response;
   };
   return { calls, impl };
@@ -58,7 +60,7 @@ test("forwards traces with the real Langfuse credentials", async () => {
   assert.equal(url, "https://langfuse.example.com" + TRACES_PATH);
   assert.equal(init.method, "POST");
   assert.equal(init.redirect, "manual");
-  assert.equal(body, '{"resourceSpans":[]}');
+  assert.deepEqual(body, new Uint8Array(gzipSync('{"resourceSpans":[]}')));
   assert.equal(init.headers.get("authorization"), basic("pk-lf-real", "sk-lf-real"));
   assert.equal(init.headers.get("content-encoding"), "gzip");
   assert.equal(init.headers.get("content-type"), "application/json");
@@ -119,6 +121,35 @@ test("enforces the body size limit", async () => {
   assert.equal(up.calls.length, 0);
 });
 
+test("rejects gzip bombs and unsupported encodings before touching upstream", async () => {
+  const up = fakeUpstream();
+
+  const bomb = new Uint8Array(gzipSync(Buffer.alloc(MAX_DECODED_BYTES + 1)));
+  assert.ok(bomb.byteLength < MAX_BODY_BYTES);
+  assert.equal((await handle(post(bomb), ENV, up.impl)).status, 413);
+
+  const corrupt = await handle(post(new Uint8Array([1, 2, 3, 4])), ENV, up.impl);
+  assert.equal(corrupt.status, 400);
+
+  const br = await handle(post("{}", { "content-encoding": "br" }), ENV, up.impl);
+  assert.equal(br.status, 415);
+
+  assert.equal(up.calls.length, 0);
+});
+
+test("accepts uncompressed bodies", async () => {
+  const up = fakeUpstream();
+  const raw = new TextEncoder().encode("{}");
+  const res = await handle(post(raw, { "content-encoding": "" }), ENV, up.impl);
+  assert.equal(res.status, 200);
+  assert.equal(up.calls[0].init.headers.get("content-encoding"), null);
+});
+
+test("decodedSize counts decompressed bytes", async () => {
+  assert.equal(await decodedSize(new Uint8Array(gzipSync("hello")), "gzip"), 5);
+  assert.equal(await decodedSize(new Uint8Array(7), "identity"), 7);
+});
+
 test("returns 429 with Retry-After when the client IP is rate limited", async () => {
   const up = fakeUpstream();
   const keys = [];
@@ -132,23 +163,29 @@ test("returns 429 with Retry-After when the client IP is rate limited", async ()
   assert.equal(up.calls.length, 0);
 });
 
-test("does not spend rate limit budget on unauthenticated requests", async () => {
-  const keys = [];
-  const env = { ...ENV, RATE_LIMITER: { limit: async ({ key }) => (keys.push(key), { success: true }) } };
+test("rate limits before checking the token", async () => {
+  const env = { ...ENV, RATE_LIMITER: { limit: async () => ({ success: false }) } };
 
   const res = await handle(post("{}", { authorization: basic("x", "bad") }), env, fakeUpstream().impl);
 
-  assert.equal(res.status, 401);
-  assert.deepEqual(keys, []);
+  assert.equal(res.status, 429);
 });
 
-test("passes upstream errors through so the client can retry", async () => {
-  const up = fakeUpstream(new Response("busy", { status: 503, headers: { "retry-after": "30" } }));
+test("keeps upstream error status but hides its body", async () => {
+  const up = fakeUpstream(new Response("db at 10.0.0.5 is busy", { status: 503, headers: { "retry-after": "30" } }));
+  const errors = [];
+  const original = console.error;
+  console.error = (...args) => errors.push(args.join(" "));
+  try {
+    const res = await handle(post("{}"), ENV, up.impl);
 
-  const res = await handle(post("{}"), ENV, up.impl);
-
-  assert.equal(res.status, 503);
-  assert.equal(res.headers.get("retry-after"), "30");
+    assert.equal(res.status, 503);
+    assert.equal(res.headers.get("retry-after"), "30");
+    assert.equal((await res.text()).includes("10.0.0.5"), false);
+    assert.ok(errors.some((e) => e.includes("10.0.0.5")), "upstream detail should be logged");
+  } finally {
+    console.error = original;
+  }
 });
 
 test("maps upstream network failures to 502", async () => {
